@@ -1,181 +1,415 @@
 <!DOCTYPE html>
 <html lang="bn">
-
 <head>
 
-    <meta charset="UTF-8">
+<meta charset="UTF-8">
 
-    <meta
-        name="viewport"
-        content="width=device-width,initial-scale=1"
-    >
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+>
 
-    <title>Bangla Vibe</title>
+<title>Bangla Vibe</title>
 
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-    <style>
+<style>
 
-        * {
-            box-sizing: border-box;
-        }
+* {
+    box-sizing: border-box;
+}
 
-        body {
-            margin: 0;
-            padding: 20px;
-            background: #f4f6f8;
-            color: #222;
-            font-family:
-                Arial,
-                "Noto Sans Bengali",
-                sans-serif;
-            text-align: center;
-        }
+html,
+body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: #050509;
+    color: white;
+    font-family:
+        Arial,
+        "Noto Sans Bengali",
+        sans-serif;
+}
 
-        .box {
-            max-width: 600px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 18px;
-            padding: 20px;
-            box-shadow:
-                0 5px 25px
-                rgba(0,0,0,.08);
-        }
+body {
+    padding-bottom: 30px;
+}
 
-        h2 {
-            margin-top: 5px;
-        }
+.container {
+    width: 100%;
+    max-width: 720px;
+    margin: auto;
+    padding: 18px;
+}
 
-        #title {
-            font-size: 22px;
-            font-weight: bold;
-            margin: 15px 0 8px;
-        }
+.header {
+    text-align: center;
+    padding: 10px 0 18px;
+}
 
-        #description {
-            color: #666;
-            margin-bottom: 15px;
-            white-space: pre-wrap;
-        }
+.logo {
+    font-size: 27px;
+    font-weight: 900;
 
-        .btn {
-            width: 100%;
-            border: 0;
-            border-radius: 12px;
-            padding: 14px;
-            margin-top: 10px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-        }
+    background:
+        linear-gradient(
+            90deg,
+            #ff2bd6,
+            #9d4edd,
+            #00eaff
+        );
 
-        .ad-btn {
-            background: #1976d2;
-            color: white;
-        }
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
 
-        .open-btn {
-            background: #2e7d32;
-            color: white;
-            display: none;
-        }
+.subtitle {
+    color: #aaa;
+    margin-top: 7px;
+    font-size: 14px;
+}
 
-        .media {
-            width: 100%;
-            max-height: 70vh;
-            margin-top: 20px;
-            border-radius: 12px;
-            display: none;
-        }
+.card {
+    position: relative;
 
-        audio.media {
-            height: 55px;
-        }
+    background:
+        linear-gradient(
+            145deg,
+            rgba(30, 15, 45, .96),
+            rgba(5, 10, 25, .98)
+        );
 
-        .notice {
-            padding: 12px;
-            background: #fff8e1;
-            border-radius: 10px;
-            margin-top: 15px;
-            font-size: 14px;
-        }
+    border: 1px solid rgba(255, 43, 214, .45);
 
-        .error {
-            color: #c62828;
-            margin-top: 15px;
-        }
+    border-radius: 22px;
 
-        .loading {
-            margin: 25px 0;
-        }
+    overflow: hidden;
 
-    </style>
+    box-shadow:
+        0 0 25px rgba(255, 43, 214, .12),
+        0 0 40px rgba(0, 234, 255, .08);
+}
+
+.thumbnail-box {
+    width: 100%;
+    background: #08080d;
+}
+
+.thumbnail {
+    width: 100%;
+    display: block;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+}
+
+.content {
+    padding: 18px;
+}
+
+.title {
+    font-size: 23px;
+    font-weight: 800;
+    line-height: 1.35;
+    margin-bottom: 10px;
+
+    color: #fff;
+
+    text-shadow:
+        0 0 12px rgba(255, 43, 214, .35);
+}
+
+.description {
+    color: #aaa;
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 18px;
+}
+
+.lock {
+    padding: 13px 15px;
+    border-radius: 14px;
+
+    background:
+        rgba(255,255,255,.045);
+
+    border:
+        1px solid rgba(255,255,255,.08);
+
+    color: #ddd;
+    font-size: 14px;
+
+    margin-bottom: 14px;
+}
+
+.button {
+    width: 100%;
+    border: 0;
+    border-radius: 15px;
+
+    padding: 15px;
+
+    font-size: 16px;
+    font-weight: 800;
+
+    color: white;
+
+    cursor: pointer;
+
+    background:
+        linear-gradient(
+            90deg,
+            #ff1493,
+            #9d4edd,
+            #00cfff
+        );
+
+    box-shadow:
+        0 0 20px rgba(255, 20, 147, .25);
+
+    transition: .2s;
+}
+
+.button:active {
+    transform: scale(.97);
+}
+
+.ad-box {
+    display: none;
+
+    margin-top: 16px;
+    padding: 17px;
+
+    border-radius: 16px;
+
+    background:
+        rgba(255,255,255,.04);
+
+    border:
+        1px solid rgba(0,234,255,.25);
+
+    text-align: center;
+}
+
+.ad-title {
+    font-weight: 800;
+    margin-bottom: 7px;
+}
+
+.ad-text {
+    color: #aaa;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.video-box {
+    display: none;
+    margin-top: 18px;
+}
+
+video,
+audio {
+    width: 100%;
+    display: block;
+
+    border-radius: 15px;
+
+    background: #000;
+
+    box-shadow:
+        0 0 25px rgba(0,234,255,.12);
+}
+
+.photo-box {
+    display: none;
+    margin-top: 18px;
+}
+
+.photo-box img {
+    width: 100%;
+    display: block;
+
+    border-radius: 15px;
+}
+
+.loading {
+    text-align: center;
+    padding: 50px 15px;
+    color: #aaa;
+}
+
+.error {
+    text-align: center;
+    padding: 50px 15px;
+    color: #ff7adf;
+}
+
+.neon-line {
+    height: 2px;
+    margin: 15px 0 20px;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            #ff2bd6,
+            #00eaff,
+            transparent
+        );
+
+    box-shadow:
+        0 0 12px rgba(255,43,214,.6);
+}
+
+.small {
+    color: #777;
+    text-align: center;
+    font-size: 11px;
+    margin-top: 18px;
+}
+
+</style>
 
 </head>
 
 <body>
 
-<div class="box">
+<div class="container">
 
-    <h2>🔥 Bangla Vibe</h2>
+    <div class="header">
 
-    <div
-        id="loading"
-        class="loading"
-    >
-        ⏳ Loading...
-    </div>
-
-    <div id="content" style="display:none;">
-
-        <div id="title"></div>
-
-        <div id="description"></div>
-
-        <div class="notice">
-            📢 কনটেন্ট দেখার আগে বিজ্ঞাপনের পেজ খুলবে।
+        <div class="logo">
+            🔥 Bangla Vibe
         </div>
 
-        <button
-            id="adButton"
-            class="btn ad-btn"
-            onclick="openAd()"
-        >
-            📢 বিজ্ঞাপন খুলুন
-        </button>
+        <div class="subtitle">
+            Premium Content
+        </div>
 
-        <button
-            id="openButton"
-            class="btn open-btn"
-            onclick="unlockMedia()"
-        >
-            🔓 কনটেন্ট খুলুন
-        </button>
+    </div>
 
-        <div
-            id="error"
-            class="error"
-        ></div>
+    <div id="loading" class="loading">
+        Content loading...
+    </div>
 
-        <img
-            id="image"
-            class="media"
-            alt="Bangla Vibe"
-        >
+    <div id="error" class="error" style="display:none;">
+        Content পাওয়া যায়নি।
+    </div>
 
-        <video
-            id="video"
-            class="media"
-            controls
-            playsinline
-        ></video>
+    <div id="mainCard" class="card" style="display:none;">
 
-        <audio
-            id="audio"
-            class="media"
-            controls
-        ></audio>
+        <div class="thumbnail-box">
+
+            <img
+                id="thumbnail"
+                class="thumbnail"
+                src=""
+                alt="Thumbnail"
+            >
+
+        </div>
+
+        <div class="content">
+
+            <div
+                id="title"
+                class="title"
+            ></div>
+
+            <div
+                id="description"
+                class="description"
+            ></div>
+
+            <div class="neon-line"></div>
+
+            <div class="lock">
+                🔒 কনটেন্ট দেখতে নিচের Button চাপুন।
+                <br><br>
+                📢 প্রথমে বিজ্ঞাপনের পেজ খুলবে।
+            </div>
+
+            <button
+                id="adButton"
+                class="button"
+                onclick="openAd()"
+            >
+                📢 বিজ্ঞাপন খুলুন
+            </button>
+
+            <div
+                id="adBox"
+                class="ad-box"
+            >
+
+                <div class="ad-title">
+                    ✅ বিজ্ঞাপন পেজ খোলা হয়েছে
+                </div>
+
+                <div class="ad-text">
+                    বিজ্ঞাপনের পেজ থেকে ফিরে এসে
+                    নিচের Button চাপুন।
+                </div>
+
+                <br>
+
+                <button
+                    id="unlockButton"
+                    class="button"
+                    onclick="unlockContent()"
+                >
+                    🔓 ভিডিও দেখুন
+                </button>
+
+            </div>
+
+            <div
+                id="videoBox"
+                class="video-box"
+            >
+
+                <video
+                    id="video"
+                    controls
+                    playsinline
+                    preload="metadata"
+                >
+                </video>
+
+            </div>
+
+            <div
+                id="photoBox"
+                class="photo-box"
+            >
+
+                <img
+                    id="photo"
+                    src=""
+                    alt="Content"
+                >
+
+            </div>
+
+            <div
+                id="audioBox"
+                class="video-box"
+            >
+
+                <audio
+                    id="audio"
+                    controls
+                    preload="metadata"
+                >
+                </audio>
+
+            </div>
+
+            <div class="small">
+                Bangla Vibe
+            </div>
+
+        </div>
 
     </div>
 
@@ -184,193 +418,287 @@
 
 <script>
 
-    const tg =
-        window.Telegram &&
-        window.Telegram.WebApp
-            ? window.Telegram.WebApp
-            : null;
+const tg =
+    window.Telegram &&
+    window.Telegram.WebApp
+        ? window.Telegram.WebApp
+        : null;
 
-    if (tg) {
-        tg.ready();
-        tg.expand();
-    }
+if (tg) {
+    tg.ready();
+    tg.expand();
+}
 
+
+let mediaData = null;
+let adOpened = false;
+
+
+function getMediaId() {
 
     const params =
         new URLSearchParams(
             window.location.search
         );
 
-    const mediaId =
-        params.get("media_id");
+    return params.get("id");
+}
 
 
-    let mediaData = null;
+async function loadMedia() {
 
+    const id = getMediaId();
 
-    async function loadMedia() {
+    if (!id) {
+        showError();
+        return;
+    }
 
-        if (!mediaId) {
+    try {
 
-            showError(
-                "❌ Media ID পাওয়া যায়নি।"
+        const response =
+            await fetch(
+                "/api/media/" + encodeURIComponent(id)
             );
 
-            return;
+        if (!response.ok) {
+            throw new Error("Media not found");
         }
 
-        try {
-
-            const response =
-                await fetch(
-                    `/api/media/${encodeURIComponent(mediaId)}`
-                );
-
-            const data =
-                await response.json();
-
-            if (!data.ok) {
-
-                showError(
-                    "❌ Media পাওয়া যায়নি।"
-                );
-
-                return;
-            }
-
-            mediaData = data;
-
-            document.getElementById(
-                "loading"
-            ).style.display = "none";
-
-            document.getElementById(
-                "content"
-            ).style.display = "block";
-
-            document.getElementById(
-                "title"
-            ).textContent =
-                data.title;
-
-            document.getElementById(
-                "description"
-            ).textContent =
-                data.description || "";
-
-        } catch (error) {
-
-            console.error(error);
-
-            showError(
-                "❌ Server থেকে Media তথ্য আনা যায়নি।"
-            );
-        }
-    }
-
-
-    function openAd() {
-
-        if (!mediaData) {
-            return;
-        }
-
-        /*
-         * SmartLink user-এর browser-এ খুলবে।
-         * কোনো automatic/fake click করা হচ্ছে না।
-         */
-
-        window.open(
-            mediaData.ad_url,
-            "_blank"
-        );
-
-        document.getElementById(
-            "adButton"
-        ).style.display = "none";
-
-        document.getElementById(
-            "openButton"
-        ).style.display = "block";
-    }
-
-
-    function unlockMedia() {
-
-        if (!mediaData) {
-            return;
-        }
-
-        const type =
-            mediaData.type;
-
-        const url =
-            mediaData.media_url;
-
-
-        if (type === "photo") {
-
-            const image =
-                document.getElementById(
-                    "image"
-                );
-
-            image.src = url;
-            image.style.display = "block";
-
-        }
-
-        else if (type === "video") {
-
-            const video =
-                document.getElementById(
-                    "video"
-                );
-
-            video.src = url;
-            video.style.display = "block";
-
-            video.load();
-
-        }
-
-        else if (type === "audio") {
-
-            const audio =
-                document.getElementById(
-                    "audio"
-                );
-
-            audio.src = url;
-            audio.style.display = "block";
-
-            audio.load();
-
-        }
-
-        document.getElementById(
-            "openButton"
-        ).style.display = "none";
-    }
-
-
-    function showError(message) {
+        mediaData =
+            await response.json();
 
         document.getElementById(
             "loading"
         ).style.display = "none";
 
         document.getElementById(
-            "error"
+            "mainCard"
+        ).style.display = "block";
+
+
+        document.getElementById(
+            "title"
         ).textContent =
-            message;
+            mediaData.title || "Content";
+
+
+        const description =
+            mediaData.description || "";
+
+        if (description) {
+
+            document.getElementById(
+                "description"
+            ).textContent =
+                description;
+
+        } else {
+
+            document.getElementById(
+                "description"
+            ).style.display = "none";
+
+        }
+
+
+        const thumbnail =
+            document.getElementById(
+                "thumbnail"
+            );
+
+        if (mediaData.thumbnail_url) {
+
+            thumbnail.src =
+                mediaData.thumbnail_url;
+
+        } else {
+
+            thumbnail.style.display =
+                "none";
+        }
+
+    } catch (error) {
+
+        console.error(error);
+
+        showError();
+    }
+}
+
+
+function showError() {
+
+    document.getElementById(
+        "loading"
+    ).style.display = "none";
+
+    document.getElementById(
+        "error"
+    ).style.display = "block";
+}
+
+
+/*
+    SmartLink cannot reliably tell our page
+    that an ad was completed.
+
+    We therefore open the SmartLink only
+    after the user presses the button.
+*/
+
+
+function openAd() {
+
+    if (!mediaData) {
+        return;
+    }
+
+    adOpened = true;
+
+    const adBox =
+        document.getElementById(
+            "adBox"
+        );
+
+    adBox.style.display =
+        "block";
+
+
+    /*
+        Open SmartLink from a direct
+        user click.
+    */
+
+    try {
+
+        window.open(
+            "https://www.profitableratecpmnetwork.com/cc0kqkj3?key=96d4caaba1f61e2b9329ad0d07861cf4",
+            "_blank"
+        );
+
+    } catch (error) {
+
+        window.location.href =
+            "https://www.profitableratecpmnetwork.com/cc0kqkj3?key=96d4caaba1f61e2b9329ad0d07861cf4";
     }
 
 
-    loadMedia();
+    document.getElementById(
+        "adButton"
+    ).style.display =
+        "none";
+}
+
+
+function unlockContent() {
+
+    if (!adOpened || !mediaData) {
+        return;
+    }
+
+    const videoBox =
+        document.getElementById(
+            "videoBox"
+        );
+
+    const photoBox =
+        document.getElementById(
+            "photoBox"
+        );
+
+    const audioBox =
+        document.getElementById(
+            "audioBox"
+        );
+
+
+    if (mediaData.media_type === "video") {
+
+        const video =
+            document.getElementById(
+                "video"
+            );
+
+        video.src =
+            mediaData.media_url;
+
+        videoBox.style.display =
+            "block";
+
+        video.load();
+
+        setTimeout(
+            () => {
+                video.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center"
+                });
+            },
+            200
+        );
+
+    }
+
+
+    else if (
+        mediaData.media_type === "photo"
+    ) {
+
+        const photo =
+            document.getElementById(
+                "photo"
+            );
+
+        photo.src =
+            mediaData.media_url;
+
+        photoBox.style.display =
+            "block";
+
+        setTimeout(
+            () => {
+                photo.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center"
+                });
+            },
+            200
+        );
+
+    }
+
+
+    else if (
+        mediaData.media_type === "audio"
+    ) {
+
+        const audio =
+            document.getElementById(
+                "audio"
+            );
+
+        audio.src =
+            mediaData.media_url;
+
+        audioBox.style.display =
+            "block";
+
+        audio.load();
+
+    }
+
+
+    document.getElementById(
+        "adBox"
+    ).style.display =
+        "none";
+}
+
+
+loadMedia();
 
 </script>
 
 </body>
-
-  </html>
+    </html>
