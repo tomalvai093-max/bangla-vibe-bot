@@ -22,7 +22,6 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# তোমার Telegram User ID
 ADMIN_ID = 8721334265
 
 if not BOT_TOKEN:
@@ -92,6 +91,10 @@ async def init_db():
 
     async with db_pool.acquire() as conn:
 
+        # -------------------------------------------------
+        # CATEGORIES
+        # -------------------------------------------------
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS categories (
                 id SERIAL PRIMARY KEY,
@@ -99,16 +102,54 @@ async def init_db():
             )
         """)
 
+        # -------------------------------------------------
+        # VIDEOS
+        # -------------------------------------------------
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS videos (
                 id SERIAL PRIMARY KEY,
-                file_id TEXT NOT NULL,
-                title TEXT NOT NULL,
+                file_id TEXT,
+                title TEXT DEFAULT '',
                 description TEXT DEFAULT '',
-                category TEXT NOT NULL,
+                category TEXT DEFAULT '🎬 ভিডিও',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # IMPORTANT:
+        # পুরোনো videos table থাকলেও missing column যোগ হবে।
+        # কোনো পুরোনো video delete হবে না।
+
+        await conn.execute("""
+            ALTER TABLE videos
+            ADD COLUMN IF NOT EXISTS file_id TEXT
+        """)
+
+        await conn.execute("""
+            ALTER TABLE videos
+            ADD COLUMN IF NOT EXISTS title TEXT DEFAULT ''
+        """)
+
+        await conn.execute("""
+            ALTER TABLE videos
+            ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''
+        """)
+
+        await conn.execute("""
+            ALTER TABLE videos
+            ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '🎬 ভিডিও'
+        """)
+
+        await conn.execute("""
+            ALTER TABLE videos
+            ADD COLUMN IF NOT EXISTS created_at
+            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        """)
+
+        # -------------------------------------------------
+        # SOCIAL LINKS
+        # -------------------------------------------------
 
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS social_links (
@@ -118,15 +159,45 @@ async def init_db():
             )
         """)
 
+        # -------------------------------------------------
+        # CONTACTS
+        # -------------------------------------------------
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS contacts (
                 id SERIAL PRIMARY KEY,
-                user_id BIGINT UNIQUE NOT NULL,
+                user_id BIGINT,
                 username TEXT DEFAULT '',
                 name TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # পুরোনো contacts table থাকলে missing column যোগ হবে
+        await conn.execute("""
+            ALTER TABLE contacts
+            ADD COLUMN IF NOT EXISTS user_id BIGINT
+        """)
+
+        await conn.execute("""
+            ALTER TABLE contacts
+            ADD COLUMN IF NOT EXISTS username TEXT DEFAULT ''
+        """)
+
+        await conn.execute("""
+            ALTER TABLE contacts
+            ADD COLUMN IF NOT EXISTS name TEXT DEFAULT ''
+        """)
+
+        await conn.execute("""
+            ALTER TABLE contacts
+            ADD COLUMN IF NOT EXISTS created_at
+            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        """)
+
+        # -------------------------------------------------
+        # REQUESTS
+        # -------------------------------------------------
 
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS requests (
@@ -137,6 +208,10 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # -------------------------------------------------
+        # DEFAULT CATEGORIES
+        # -------------------------------------------------
 
         default_categories = [
             "🎵 গান",
@@ -157,6 +232,7 @@ async def init_db():
             )
 
     logger.info("PostgreSQL database ready")
+    logger.info("🔥 Database migration checked successfully")
 
 
 # =========================================================
@@ -171,7 +247,6 @@ def normalize(text):
     text = text.lower().strip()
 
     replacements = {
-        "  ": " ",
         "দেও": "দাও",
         "দেন": "দাও",
         "দিন": "দাও",
@@ -183,81 +258,112 @@ def normalize(text):
     for old, new in replacements.items():
         text = text.replace(old, new)
 
-    return text
+    return " ".join(text.split())
 
+
+# =========================================================
+# SAVE CONTACT
+# =========================================================
 
 async def save_contact(user):
     try:
         async with db_pool.acquire() as conn:
-            await conn.execute(
+
+            # ON CONFLICT ব্যবহার করছি না,
+            # কারণ পুরোনো contacts table-এ UNIQUE constraint
+            # নাও থাকতে পারে।
+
+            existing = await conn.fetchval(
                 """
-                INSERT INTO contacts
-                (user_id, username, name)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id)
-                DO UPDATE SET
-                    username = EXCLUDED.username,
-                    name = EXCLUDED.name
+                SELECT id
+                FROM contacts
+                WHERE user_id = $1
+                LIMIT 1
                 """,
                 user.id,
-                user.username or "",
-                user.full_name or "",
             )
+
+            if existing:
+
+                await conn.execute(
+                    """
+                    UPDATE contacts
+                    SET username = $1,
+                        name = $2
+                    WHERE user_id = $3
+                    """,
+                    user.username or "",
+                    user.full_name or "",
+                    user.id,
+                )
+
+            else:
+
+                await conn.execute(
+                    """
+                    INSERT INTO contacts
+                    (user_id, username, name)
+                    VALUES ($1, $2, $3)
+                    """,
+                    user.id,
+                    user.username or "",
+                    user.full_name or "",
+                )
+
     except Exception:
         logger.exception("Contact save error")
 
 
 # =========================================================
-# START
+# START MENU
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await save_contact(update.effective_user)
 
-    keyboard = [
-        [
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT name
+            FROM categories
+            ORDER BY id
+            """
+        )
+
+    buttons = []
+
+    # Dynamic categories
+    temp = []
+
+    for row in rows:
+        temp.append(
             InlineKeyboardButton(
-                "🎵 গান",
-                callback_data="category:🎵 গান",
-            ),
-            InlineKeyboardButton(
-                "🎭 নাটক",
-                callback_data="category:🎭 নাটক",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "🎬 ভিডিও",
-                callback_data="category:🎬 ভিডিও",
-            ),
-            InlineKeyboardButton(
-                "📸 ফটো",
-                callback_data="category:📸 ফটো",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "🎥 মুভি",
-                callback_data="category:🎥 মুভি",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "📘 Admin Facebook",
-                callback_data="social:facebook",
-            ),
-            InlineKeyboardButton(
-                "🎵 Admin TikTok",
-                callback_data="social:tiktok",
-            ),
-        ],
-    ]
+                row["name"],
+                callback_data=f"category:{row['name']}",
+            )
+        )
+
+    # প্রতি row-তে 2টি button
+    for i in range(0, len(temp), 2):
+        buttons.append(temp[i:i + 2])
+
+    # Social
+    buttons.append([
+        InlineKeyboardButton(
+            "📘 Admin Facebook",
+            callback_data="social:facebook",
+        ),
+        InlineKeyboardButton(
+            "🎵 Admin TikTok",
+            callback_data="social:tiktok",
+        ),
+    ])
 
     await update.message.reply_text(
         "🔥 *Bangla Vibe*\n\n"
-        "স্বাগতম! ভিডিও দেখতে নিচের অপশন ব্যবহার করুন।",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        "স্বাগতম! নিচের Category থেকে ভিডিও নির্বাচন করুন।",
+        reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown",
     )
 
@@ -330,7 +436,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "👥 Users",
                 callback_data="admin:users",
             ),
-        ],
     ]
 
     await update.message.reply_text(
@@ -377,10 +482,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     action = query.data
 
-    # -----------------------------------------------------
     # ADD VIDEO
-    # -----------------------------------------------------
-
     if action == "admin:add_video":
 
         clear_state(context)
@@ -388,14 +490,12 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.reply_text(
             "🎬 ভিডিও পাঠাও।\n\n"
-            "ভিডিও পাঠানোর পর আমি নাম, Description এবং Category চাইব।"
+            "ভিডিও পাঠানোর পর নাম, Description এবং Category চাইব।"
         )
+        return
 
-    # -----------------------------------------------------
     # DELETE VIDEO
-    # -----------------------------------------------------
-
-    elif action == "admin:delete_video":
+    if action == "admin:delete_video":
 
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
@@ -415,9 +515,11 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = []
 
         for row in rows:
+            title = row["title"] or f"Video #{row['id']}"
+
             buttons.append([
                 InlineKeyboardButton(
-                    f"🗑 {row['title']}",
+                    f"🗑 {title}",
                     callback_data=f"delete_video:{row['id']}",
                 )
             ])
@@ -426,12 +528,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🗑 কোন ভিডিও ডিলিট করবে?",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
+        return
 
-    # -----------------------------------------------------
     # ADD CATEGORY
-    # -----------------------------------------------------
-
-    elif action == "admin:add_category":
+    if action == "admin:add_category":
 
         set_state(context, "add_category")
 
@@ -439,12 +539,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📂 নতুন Category-এর নাম লিখো।\n\n"
             "উদাহরণ: ⚽ খেলাধুলা"
         )
+        return
 
-    # -----------------------------------------------------
     # DELETE CATEGORY
-    # -----------------------------------------------------
-
-    elif action == "admin:delete_category":
+    if action == "admin:delete_category":
 
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
@@ -464,6 +562,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = []
 
         for row in rows:
+
             buttons.append([
                 InlineKeyboardButton(
                     f"🗑 {row['name']}",
@@ -475,57 +574,47 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🗑 কোন Category ডিলিট করবে?",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
+        return
 
-    # -----------------------------------------------------
-    # ADD FACEBOOK
-    # -----------------------------------------------------
-
-    elif action == "admin:add_facebook":
+    # FACEBOOK
+    if action == "admin:add_facebook":
 
         set_state(context, "add_facebook")
 
         await query.message.reply_text(
             "📘 Facebook ID বা Profile Link পাঠাও।"
         )
+        return
 
-    # -----------------------------------------------------
-    # ADD TIKTOK
-    # -----------------------------------------------------
-
-    elif action == "admin:add_tiktok":
+    # TIKTOK
+    if action == "admin:add_tiktok":
 
         set_state(context, "add_tiktok")
 
         await query.message.reply_text(
             "🎵 TikTok ID বা Profile Link পাঠাও।"
         )
+        return
 
-    # -----------------------------------------------------
     # DELETE FACEBOOK
-    # -----------------------------------------------------
-
-    elif action == "admin:delete_facebook":
+    if action == "admin:delete_facebook":
 
         await delete_social("facebook", query.message)
+        return
 
-    # -----------------------------------------------------
     # DELETE TIKTOK
-    # -----------------------------------------------------
-
-    elif action == "admin:delete_tiktok":
+    if action == "admin:delete_tiktok":
 
         await delete_social("tiktok", query.message)
+        return
 
-    # -----------------------------------------------------
     # CATEGORIES
-    # -----------------------------------------------------
-
-    elif action == "admin:categories":
+    if action == "admin:categories":
 
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT name
+                SELECT id, name
                 FROM categories
                 ORDER BY id
                 """
@@ -546,12 +635,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text,
             parse_mode="Markdown",
         )
+        return
 
-    # -----------------------------------------------------
     # VIDEOS
-    # -----------------------------------------------------
-
-    elif action == "admin:videos":
+    if action == "admin:videos":
 
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
@@ -573,20 +660,18 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for row in rows:
             text += (
                 f"🆔 {row['id']}\n"
-                f"🎬 {row['title']}\n"
-                f"📂 {row['category']}\n\n"
+                f"🎬 {row['title'] or 'Unnamed'}\n"
+                f"📂 {row['category'] or '🎬 ভিডিও'}\n\n"
             )
 
         await query.message.reply_text(
             text,
             parse_mode="Markdown",
         )
+        return
 
-    # -----------------------------------------------------
     # USERS
-    # -----------------------------------------------------
-
-    elif action == "admin:users":
+    if action == "admin:users":
 
         async with db_pool.acquire() as conn:
             count = await conn.fetchval(
@@ -596,15 +681,17 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             f"👥 মোট User/Contact: {count}"
         )
+        return
 
 
 # =========================================================
-# SOCIAL FUNCTIONS
+# SOCIAL
 # =========================================================
 
 async def save_social(platform, value):
 
     async with db_pool.acquire() as conn:
+
         await conn.execute(
             """
             INSERT INTO social_links (platform, value)
@@ -630,12 +717,15 @@ async def delete_social(platform, message):
         )
 
     if result.endswith("0"):
+
         await message.reply_text(
-            f"ℹ️ এখনো কোনো {platform.title()} ID/Link যোগ করা হয়নি।"
+            f"ℹ️ কোনো {platform.title()} ID/Link যোগ করা হয়নি।"
         )
+
     else:
+
         await message.reply_text(
-            f"✅ {platform.title()} ID/Link ডিলিট করা হয়েছে।"
+            f"✅ {platform.title()} ID/Link ডিলিট হয়েছে।"
         )
 
 
@@ -656,13 +746,10 @@ async def get_social(platform):
 
 
 # =========================================================
-# SHOW SOCIAL TO USER
+# SHOW SOCIAL
 # =========================================================
 
-async def show_social(
-    update: Update,
-    platform: str,
-):
+async def show_social(update: Update, platform: str):
 
     query = update.callback_query
     await query.answer()
@@ -671,23 +758,22 @@ async def show_social(
 
     if value:
 
-        if platform == "facebook":
-            title = "📘 Admin Facebook"
-
-        else:
-            title = "🎵 Admin TikTok"
+        title = (
+            "📘 Admin Facebook"
+            if platform == "facebook"
+            else "🎵 Admin TikTok"
+        )
 
         await query.message.reply_text(
-            f"{title}\n\n"
-            f"{value}"
+            f"{title}\n\n{value}"
         )
 
     else:
 
         await query.message.reply_text(
-            f"😔 দুঃখিত!\n\n"
+            "😔 দুঃখিত!\n\n"
             f"Admin এখনো কোনো {platform.title()} ID/Link যোগ করেননি।\n"
-            f"পরে আবার চেষ্টা করুন। ❤️"
+            "পরে আবার চেষ্টা করুন। ❤️"
         )
 
 
@@ -695,10 +781,7 @@ async def show_social(
 # DELETE VIDEO
 # =========================================================
 
-async def delete_video_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def delete_video_callback(update, context):
 
     query = update.callback_query
     await query.answer()
@@ -706,9 +789,7 @@ async def delete_video_callback(
     if not is_admin(query.from_user.id):
         return
 
-    video_id = int(
-        query.data.split(":")[1]
-    )
+    video_id = int(query.data.split(":")[1])
 
     async with db_pool.acquire() as conn:
 
@@ -722,6 +803,7 @@ async def delete_video_callback(
         )
 
         if not row:
+
             await query.message.reply_text(
                 "❌ ভিডিও পাওয়া যায়নি।"
             )
@@ -744,10 +826,7 @@ async def delete_video_callback(
 # DELETE CATEGORY
 # =========================================================
 
-async def delete_category_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def delete_category_callback(update, context):
 
     query = update.callback_query
     await query.answer()
@@ -755,9 +834,7 @@ async def delete_category_callback(
     if not is_admin(query.from_user.id):
         return
 
-    category_id = int(
-        query.data.split(":")[1]
-    )
+    category_id = int(query.data.split(":")[1])
 
     async with db_pool.acquire() as conn:
 
@@ -771,6 +848,7 @@ async def delete_category_callback(
         )
 
         if not row:
+
             await query.message.reply_text(
                 "❌ Category পাওয়া যায়নি।"
             )
@@ -778,8 +856,25 @@ async def delete_category_callback(
 
         category_name = row["name"]
 
-        # Category-এর ভিডিও আগে মুছছি না।
-        # শুধু category delete করছি।
+        # আগে দেখে নিচ্ছি এই category-তে video আছে কি না
+        video_count = await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM videos
+            WHERE category = $1
+            """,
+            category_name,
+        )
+
+        if video_count > 0:
+
+            await query.message.reply_text(
+                f"⚠️ এই Category-তে {video_count}টি ভিডিও আছে।\n\n"
+                "ভিডিওগুলো যাতে হারিয়ে না যায়, তাই Category delete করা হয়নি।\n\n"
+                "আগে ভিডিওগুলো অন্য Category-তে রাখতে হবে।"
+            )
+            return
+
         await conn.execute(
             """
             DELETE FROM categories
@@ -794,13 +889,10 @@ async def delete_category_callback(
 
 
 # =========================================================
-# CATEGORY DISPLAY
+# SHOW CATEGORY
 # =========================================================
 
-async def show_category(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def show_category(update, context):
 
     query = update.callback_query
     await query.answer()
@@ -825,16 +917,17 @@ async def show_category(
             f"📂 {category}\n\n"
             "😔 এই Category-তে এখনো কোনো ভিডিও নেই।"
         )
-
         return
 
     buttons = []
 
     for row in rows:
 
+        title = row["title"] or f"Video #{row['id']}"
+
         buttons.append([
             InlineKeyboardButton(
-                f"▶️ {row['title']}",
+                f"▶️ {title}",
                 callback_data=f"video:{row['id']}",
             )
         ])
@@ -857,17 +950,12 @@ async def show_category(
 # SEND VIDEO
 # =========================================================
 
-async def send_video(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def send_video(update, context):
 
     query = update.callback_query
     await query.answer()
 
-    video_id = int(
-        query.data.split(":")[1]
-    )
+    video_id = int(query.data.split(":")[1])
 
     async with db_pool.acquire() as conn:
 
@@ -885,15 +973,22 @@ async def send_video(
         await query.message.reply_text(
             "❌ ভিডিও পাওয়া যায়নি।"
         )
-
         return
 
-    caption = f"🎬 {row['title']}"
+    if not row["file_id"]:
+
+        await query.message.reply_text(
+            "❌ এই ভিডিওর file তথ্য পাওয়া যাচ্ছে না।"
+        )
+        return
+
+    caption = f"🎬 {row['title'] or 'ভিডিও'}"
 
     if row["description"]:
         caption += f"\n\n📝 {row['description']}"
 
-    caption += f"\n\n📂 {row['category']}"
+    if row["category"]:
+        caption += f"\n\n📂 {row['category']}"
 
     try:
 
@@ -904,6 +999,7 @@ async def send_video(
         )
 
     except Exception:
+
         logger.exception("Video send error")
 
         await query.message.reply_text(
@@ -912,7 +1008,7 @@ async def send_video(
 
 
 # =========================================================
-# ADMIN NATURAL LANGUAGE
+# NATURAL LANGUAGE
 # =========================================================
 
 def is_add_video_text(text):
@@ -932,6 +1028,7 @@ def is_add_video_text(text):
         "upload a video",
         "ভিডিও যোগ",
         "ভিডিও যোগ কর",
+        "ভিডিও যোগ করুন",
     ]
 
     return text in phrases
@@ -1032,40 +1129,30 @@ def is_user_tiktok_request(text):
 # TEXT HANDLER
 # =========================================================
 
-async def text_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def text_handler(update, context):
 
     user = update.effective_user
     text = update.message.text.strip()
 
     await save_contact(user)
 
-    # -----------------------------------------------------
-    # ADMIN STATE
-    # -----------------------------------------------------
+    # =====================================================
+    # ADMIN
+    # =====================================================
 
     if is_admin(user.id):
 
         state = get_state(context)
 
-        # =============================================
         # VIDEO FILE
-        # =============================================
-
         if state == "video_file":
 
             await update.message.reply_text(
                 "❌ এখানে একটি Telegram Video পাঠাও।"
             )
-
             return
 
-        # =============================================
         # VIDEO TITLE
-        # =============================================
-
         if state == "video_title":
 
             context.user_data["video_title"] = text
@@ -1076,13 +1163,9 @@ async def text_handler(
                 "📝 এখন Description লিখো।\n\n"
                 "Description না চাইলে `skip` লিখো।"
             )
-
             return
 
-        # =============================================
         # VIDEO DESCRIPTION
-        # =============================================
-
         if state == "video_description":
 
             description = ""
@@ -1095,6 +1178,7 @@ async def text_handler(
             set_state(context, "video_category")
 
             async with db_pool.acquire() as conn:
+
                 rows = await conn.fetch(
                     """
                     SELECT name
@@ -1113,13 +1197,9 @@ async def text_handler(
                 f"{category_text}\n\n"
                 "চাইলে নতুন Category-এর নামও দিতে পারো।"
             )
-
             return
 
-        # =============================================
         # VIDEO CATEGORY
-        # =============================================
-
         if state == "video_category":
 
             file_id = context.user_data.get(
@@ -1144,13 +1224,13 @@ async def text_handler(
                 await update.message.reply_text(
                     "❌ ভিডিওর তথ্য পাওয়া যায়নি। আবার শুরু করো।"
                 )
-
                 return
 
             try:
 
                 async with db_pool.acquire() as conn:
 
+                    # Category থাকবে
                     await conn.execute(
                         """
                         INSERT INTO categories (name)
@@ -1159,6 +1239,10 @@ async def text_handler(
                         """,
                         category,
                     )
+
+                    # IMPORTANT:
+                    # এখানে কোনো existing video delete/update হয় না।
+                    # নতুন video শুধু INSERT হয়।
 
                     await conn.execute(
                         """
@@ -1177,10 +1261,11 @@ async def text_handler(
                 await update.message.reply_text(
                     "✅ ভিডিও সফলভাবে Save হয়েছে!\n\n"
                     f"🎬 নাম: {title}\n"
-                    f"📂 Category: {category}"
+                    f"📂 Category: {category}\n\n"
+                    "💾 Database-এ স্থায়ীভাবে সংরক্ষিত হয়েছে।"
                 )
 
-            except Exception as e:
+            except Exception:
 
                 logger.exception(
                     "VIDEO SAVE ERROR"
@@ -1190,20 +1275,18 @@ async def text_handler(
 
                 await update.message.reply_text(
                     "❌ ভিডিও Save করতে সমস্যা হয়েছে।\n\n"
-                    "Database connection বা তথ্যের কোনো সমস্যা হয়েছে।"
+                    "Render Logs-এ VIDEO SAVE ERROR দেখুন।"
                 )
 
             return
 
-        # =============================================
         # ADD CATEGORY
-        # =============================================
-
         if state == "add_category":
 
             try:
 
                 async with db_pool.acquire() as conn:
+
                     await conn.execute(
                         """
                         INSERT INTO categories (name)
@@ -1220,6 +1303,7 @@ async def text_handler(
                 )
 
             except Exception:
+
                 logger.exception(
                     "ADD CATEGORY ERROR"
                 )
@@ -1232,10 +1316,7 @@ async def text_handler(
 
             return
 
-        # =============================================
         # FACEBOOK
-        # =============================================
-
         if state == "add_facebook":
 
             try:
@@ -1253,6 +1334,7 @@ async def text_handler(
                 )
 
             except Exception:
+
                 logger.exception(
                     "FACEBOOK SAVE ERROR"
                 )
@@ -1265,10 +1347,7 @@ async def text_handler(
 
             return
 
-        # =============================================
         # TIKTOK
-        # =============================================
-
         if state == "add_tiktok":
 
             try:
@@ -1286,6 +1365,7 @@ async def text_handler(
                 )
 
             except Exception:
+
                 logger.exception(
                     "TIKTOK SAVE ERROR"
                 )
@@ -1298,9 +1378,7 @@ async def text_handler(
 
             return
 
-        # =============================================
-        # ADMIN NATURAL COMMANDS
-        # =============================================
+        # NATURAL ADMIN COMMANDS
 
         if is_add_video_text(text):
 
@@ -1314,7 +1392,6 @@ async def text_handler(
             await update.message.reply_text(
                 "🎬 ভিডিও পাঠাও।"
             )
-
             return
 
         if is_add_category_text(text):
@@ -1327,7 +1404,6 @@ async def text_handler(
             await update.message.reply_text(
                 "📂 নতুন Category-এর নাম লিখো।"
             )
-
             return
 
         if is_add_facebook_text(text):
@@ -1340,7 +1416,6 @@ async def text_handler(
             await update.message.reply_text(
                 "📘 Facebook ID বা Profile Link পাঠাও।"
             )
-
             return
 
         if is_add_tiktok_text(text):
@@ -1353,12 +1428,11 @@ async def text_handler(
             await update.message.reply_text(
                 "🎵 TikTok ID বা Profile Link পাঠাও।"
             )
-
             return
 
-    # -----------------------------------------------------
-    # USER SOCIAL REQUESTS
-    # -----------------------------------------------------
+    # =====================================================
+    # USER FACEBOOK
+    # =====================================================
 
     if is_user_facebook_request(text):
 
@@ -1380,6 +1454,10 @@ async def text_handler(
 
         return
 
+    # =====================================================
+    # USER TIKTOK
+    # =====================================================
+
     if is_user_tiktok_request(text):
 
         value = await get_social("tiktok")
@@ -1400,9 +1478,7 @@ async def text_handler(
 
         return
 
-    # -----------------------------------------------------
     # NORMAL USER
-    # -----------------------------------------------------
 
     await update.message.reply_text(
         "😊 আমি বুঝতে পারিনি।\n\n"
@@ -1411,22 +1487,20 @@ async def text_handler(
 
 
 # =========================================================
-# VIDEO MESSAGE HANDLER
+# VIDEO MESSAGE
 # =========================================================
 
-async def video_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def video_message(update, context):
 
     user = update.effective_user
+
+    await save_contact(user)
 
     if not is_admin(user.id):
 
         await update.message.reply_text(
             "😊 ভিডিও যোগ করার অনুমতি শুধু Admin-এর আছে।"
         )
-
         return
 
     state = get_state(context)
@@ -1437,7 +1511,6 @@ async def video_message(
             "ℹ️ ভিডিও যোগ করতে আগে লিখুন:\n\n"
             "ভিডিও দাও"
         )
-
         return
 
     context.user_data["video_file_id"] = (
@@ -1459,22 +1532,21 @@ async def video_message(
 # CALLBACK ROUTER
 # =========================================================
 
-async def callback_router(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def callback_router(update, context):
 
     query = update.callback_query
 
     data = query.data
 
     if data.startswith("category:"):
+
         await show_category(
             update,
             context,
         )
 
     elif data.startswith("video:"):
+
         await send_video(
             update,
             context,
@@ -1524,10 +1596,7 @@ async def callback_router(
 # ERROR HANDLER
 # =========================================================
 
-async def error_handler(
-    update: object,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def error_handler(update, context):
 
     logger.error(
         "Telegram error: %s",
@@ -1537,12 +1606,24 @@ async def error_handler(
 
 
 # =========================================================
+# POST INIT
+# =========================================================
+
+async def post_init(application):
+
+    await init_db()
+
+    logger.info(
+        "🔥 Database initialized successfully"
+    )
+
+
+# =========================================================
 # MAIN
 # =========================================================
 
 def main():
 
-    # Render web server
     web_thread = Thread(
         target=run_web_server,
         daemon=True,
@@ -1554,7 +1635,6 @@ def main():
         "🌐 Render web server started"
     )
 
-    # Telegram
     application = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -1577,7 +1657,7 @@ def main():
         )
     )
 
-    # Video message
+    # Video
     application.add_handler(
         MessageHandler(
             filters.VIDEO,
@@ -1585,7 +1665,7 @@ def main():
         )
     )
 
-    # Callback buttons
+    # Callback
     application.add_handler(
         CallbackQueryHandler(
             callback_router
@@ -1600,7 +1680,7 @@ def main():
         )
     )
 
-    # Errors
+    # Error
     application.add_error_handler(
         error_handler
     )
@@ -1611,21 +1691,6 @@ def main():
 
     application.run_polling(
         drop_pending_updates=True
-    )
-
-
-# =========================================================
-# POST INIT
-# =========================================================
-
-async def post_init(
-    application: Application,
-):
-
-    await init_db()
-
-    logger.info(
-        "🔥 Database initialized successfully"
     )
 
 
