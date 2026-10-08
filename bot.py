@@ -1,7 +1,9 @@
 import os
 import logging
-import asyncio
 import asyncpg
+
+from flask import Flask
+from threading import Thread
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -37,6 +39,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 db_pool = None
+
+
+# =========================================================
+# RENDER WEB SERVER
+# =========================================================
+
+web_app = Flask(__name__)
+
+
+@web_app.route("/")
+def health():
+    return "Bangla Vibe Bot is running!", 200
+
+
+@web_app.route("/health")
+def health_check():
+    return "OK", 200
+
+
+def run_web_server():
+    port = int(os.getenv("PORT", "10000"))
+
+    web_app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False,
+    )
 
 
 # =========================================================
@@ -397,6 +427,13 @@ async def home_callback(
         for category in categories
     ]
 
+    buttons.append([
+        InlineKeyboardButton(
+            "👑 Admin Contact",
+            callback_data="contacts"
+        )
+    ])
+
     await query.edit_message_text(
         "🌑💜 <b>Bangla Vibe</b>\n\n"
         "📂 Category নির্বাচন করো 👇",
@@ -641,6 +678,9 @@ async def save_category(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
     name = update.message.text.strip()
 
     if not name:
@@ -735,7 +775,7 @@ async def delete_video(
 
     async with db_pool.acquire() as conn:
 
-        result = await conn.execute(
+        await conn.execute(
             """
             DELETE FROM videos
             WHERE id=$1
@@ -855,7 +895,6 @@ async def text_handler(
 
     text = update.message.text.lower().strip()
 
-    # Admin contact request
     admin_words = [
         "admin",
         "এডমিন",
@@ -908,7 +947,6 @@ async def text_handler(
         )
         return
 
-    # Category matching
     words = {
         "🎵 গান": [
             "গান",
@@ -999,8 +1037,6 @@ async def text_handler(
 
                 return
 
-            # Missing content request
-
             async with db_pool.acquire() as conn:
 
                 await conn.execute(
@@ -1032,7 +1068,9 @@ async def text_handler(
                 )
 
             except Exception:
-                logger.exception("Admin request notification failed")
+                logger.exception(
+                    "Admin request notification failed"
+                )
 
             await update.message.reply_text(
                 "😔 <b>Sorry!</b>\n\n"
@@ -1154,6 +1192,12 @@ async def admin_command_from_callback(
                 callback_data="admin_requests"
             )
         ],
+        [
+            InlineKeyboardButton(
+                "👤 Admin Contacts",
+                callback_data="admin_contacts"
+            )
+        ],
     ]
 
     await query.edit_message_text(
@@ -1195,6 +1239,16 @@ async def post_init(application):
 # =========================================================
 
 def main():
+
+    # Start Render web server
+    web_thread = Thread(
+        target=run_web_server,
+        daemon=True,
+    )
+
+    web_thread.start()
+
+    logger.info("🌐 Render web server started")
 
     application = (
         Application.builder()
@@ -1343,11 +1397,16 @@ def main():
 
     application.add_error_handler(error_handler)
 
+    # Run Telegram bot
     application.run_polling(
         drop_pending_updates=True,
         allowed_updates=Update.ALL_TYPES,
     )
 
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
     main()
