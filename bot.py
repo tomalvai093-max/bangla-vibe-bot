@@ -1,20 +1,17 @@
 import os
 import asyncio
 import logging
-import urllib.request
-import urllib.parse
-import json
-from threading import Thread
+from pathlib import Path
 
 import asyncpg
-
-from flask import Flask, jsonify, Response, request
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    WebAppInfo,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
     BotCommand,
     BotCommandScopeChat,
 )
@@ -27,7 +24,6 @@ from telegram.ext import (
     filters,
 )
 
-
 # =========================================================
 # CONFIG
 # =========================================================
@@ -39,28 +35,11 @@ ADMIN_ID = 8721334265
 
 WEB_URL = "https://bangla-vibe-bot.onrender.com"
 
-AD_URL = (
-    "https://www.profitableratecpmnetwork.com/"
-    "cc0kqkj3?key=96d4caaba1f61e2b9329ad0d07861cf4"
-)
-
-PORT = int(os.environ.get("PORT", "8080"))
-
-
 if not BOT_TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN environment variable is missing"
-    )
+    raise RuntimeError("BOT_TOKEN পাওয়া যায়নি")
 
 if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL environment variable is missing"
-    )
-
-
-# =========================================================
-# LOGGING
-# =========================================================
+    raise RuntimeError("DATABASE_URL পাওয়া যায়নি")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -69,48 +48,57 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
 # =========================================================
 # FLASK
 # =========================================================
 
 app = Flask(__name__)
 
+BASE_DIR = Path(__file__).resolve().parent
+
+
+@app.route("/")
+def home():
+    return send_from_directory(BASE_DIR, "index.html")
+
+
+@app.route("/app")
+def app_page():
+    return send_from_directory(BASE_DIR, "index.html")
+
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
 
 # =========================================================
 # DATABASE
 # =========================================================
 
-async def db_connect():
-    return await asyncpg.connect(DATABASE_URL)
+async def get_pool():
+    return await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=1,
+        max_size=3,
+        command_timeout=30,
+    )
 
 
 async def init_db():
+    pool = await get_pool()
 
-    conn = await db_connect()
+    async with pool.acquire() as conn:
 
-    try:
-
-        # -------------------------------------------------
-        # CATEGORIES
-        # -------------------------------------------------
-
-        await conn.execute(
-            """
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS categories (
                 id SERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
-            """
-        )
+        """)
 
-        # -------------------------------------------------
-        # MEDIA
-        # -------------------------------------------------
-
-        await conn.execute(
-            """
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS media (
                 id SERIAL PRIMARY KEY,
                 media_type TEXT NOT NULL,
@@ -120,122 +108,58 @@ async def init_db():
                 description TEXT,
                 category TEXT,
                 created_by BIGINT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
-            """
-        )
+        """)
 
-        # -------------------------------------------------
-        # CONTACTS
-        # -------------------------------------------------
-
-        await conn.execute(
-            """
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS contacts (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT UNIQUE,
-                first_name TEXT,
                 username TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                first_name TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
-            """
-        )
+        """)
 
-        # -------------------------------------------------
-        # REQUESTS
-        # -------------------------------------------------
-
-        await conn.execute(
-            """
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS requests (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT,
                 media_id INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
-            """
-        )
+        """)
 
-        # -------------------------------------------------
-        # SOCIAL LINKS
-        # -------------------------------------------------
-
-        await conn.execute(
-            """
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS social_links (
                 id SERIAL PRIMARY KEY,
-                platform TEXT UNIQUE NOT NULL,
+                platform TEXT,
                 value TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ DEFAULT NOW()
             )
-            """
-        )
+        """)
 
-        # =================================================
-        # SAFE MIGRATIONS
-        # =================================================
+        # Safe migrations
+        migrations = [
+            "ALTER TABLE media ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT",
+            "ALTER TABLE media ADD COLUMN IF NOT EXISTS description TEXT",
+            "ALTER TABLE media ADD COLUMN IF NOT EXISTS category TEXT",
+            "ALTER TABLE media ADD COLUMN IF NOT EXISTS created_by BIGINT",
+            "ALTER TABLE media ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
+            "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS user_id BIGINT",
+            "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS username TEXT",
+            "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS first_name TEXT",
+            "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
+        ]
 
-        await conn.execute(
-            """
-            ALTER TABLE media
-            ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT
-            """
-        )
+        for sql in migrations:
+            try:
+                await conn.execute(sql)
+            except Exception as e:
+                logger.warning("Migration warning: %s", e)
 
-        await conn.execute(
-            """
-            ALTER TABLE media
-            ADD COLUMN IF NOT EXISTS description TEXT
-            """
-        )
-
-        await conn.execute(
-            """
-            ALTER TABLE media
-            ADD COLUMN IF NOT EXISTS category TEXT
-            """
-        )
-
-        await conn.execute(
-            """
-            ALTER TABLE media
-            ADD COLUMN IF NOT EXISTS created_by BIGINT
-            """
-        )
-
-        await conn.execute(
-            """
-            ALTER TABLE media
-            ADD COLUMN IF NOT EXISTS created_at TIMESTAMP
-            DEFAULT CURRENT_TIMESTAMP
-            """
-        )
-
-        await conn.execute(
-            """
-            ALTER TABLE contacts
-            ADD COLUMN IF NOT EXISTS user_id BIGINT
-            """
-        )
-
-        await conn.execute(
-            """
-            ALTER TABLE contacts
-            ADD COLUMN IF NOT EXISTS first_name TEXT
-            """
-        )
-
-        await conn.execute(
-            """
-            ALTER TABLE contacts
-            ADD COLUMN IF NOT EXISTS username TEXT
-            """
-        )
-
-        # -------------------------------------------------
-        # DEFAULT CATEGORIES
-        # -------------------------------------------------
-
+        # Default categories
         default_categories = [
             "🎵 গান",
             "🎭 নাটক",
@@ -244,22 +168,17 @@ async def init_db():
             "🎥 মুভি",
         ]
 
-        for category in default_categories:
-
+        for cat in default_categories:
             await conn.execute(
                 """
-                INSERT INTO categories (name)
-                VALUES ($1)
-                ON CONFLICT (name) DO NOTHING
+                INSERT INTO categories(name)
+                VALUES($1)
+                ON CONFLICT(name) DO NOTHING
                 """,
-                category,
+                cat,
             )
 
-    finally:
-
-        await conn.close()
-
-    logger.info("Database initialized successfully")
+    await pool.close()
 
 
 # =========================================================
@@ -267,156 +186,69 @@ async def init_db():
 # =========================================================
 
 def is_admin(user_id):
+    return user_id == ADMIN_ID
 
-    try:
-        return int(user_id) == ADMIN_ID
-    except Exception:
-        return False
-
-
-def normalize(text):
-
-    if not text:
-        return ""
-
-    return (
-        text.strip()
-        .lower()
-        .replace("য়", "য়")
-        .replace("ড়", "ড়")
-        .replace("ঢ়", "ঢ়")
-    )
-
-
-def user_states(context):
-
-    if "states" not in context.application.bot_data:
-
-        context.application.bot_data["states"] = {}
-
-    return context.application.bot_data["states"]
-
-
-def get_state(context, user_id):
-
-    return user_states(context).get(user_id)
-
-
-def set_state(context, user_id, value):
-
-    user_states(context)[user_id] = value
-
-
-def clear_state(context, user_id):
-
-    user_states(context).pop(user_id, None)
-
-
-# =========================================================
-# CONTACT SAVE
-# =========================================================
 
 async def save_contact(user):
-
-    conn = await db_connect()
-
     try:
+        pool = await get_pool()
 
-        existing = await conn.fetchval(
-            """
-            SELECT id
-            FROM contacts
-            WHERE user_id = $1
-            LIMIT 1
-            """,
-            user.id,
-        )
-
-        if existing:
-
-            await conn.execute(
-                """
-                UPDATE contacts
-                SET
-                    first_name = $2,
-                    username = $3
-                WHERE user_id = $1
-                """,
+        async with pool.acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT id FROM contacts WHERE user_id=$1",
                 user.id,
-                user.first_name or "",
-                user.username or "",
             )
 
-        else:
-
-            await conn.execute(
-                """
-                INSERT INTO contacts
-                (
-                    user_id,
-                    first_name,
-                    username
+            if exists:
+                await conn.execute(
+                    """
+                    UPDATE contacts
+                    SET username=$1, first_name=$2
+                    WHERE user_id=$3
+                    """,
+                    user.username,
+                    user.first_name,
+                    user.id,
                 )
-                VALUES ($1, $2, $3)
-                """,
-                user.id,
-                user.first_name or "",
-                user.username or "",
-            )
-
-    finally:
-
-        await conn.close()
-
-
-# =========================================================
-# COMMAND MENU
-# =========================================================
-
-async def setup_commands(application):
-
-    try:
-
-        await application.bot.set_my_commands(
-            [
-                BotCommand(
-                    "start",
-                    "Bot শুরু করুন",
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO contacts(user_id, username, first_name)
+                    VALUES($1,$2,$3)
+                    """,
+                    user.id,
+                    user.username,
+                    user.first_name,
                 )
-            ]
-        )
+
+        await pool.close()
 
     except Exception as e:
+        logger.error("save_contact error: %s", e)
 
-        logger.warning(
-            "Global command menu error: %s",
-            e,
-        )
 
-    try:
-
-        await application.bot.set_my_commands(
+def admin_keyboard():
+    return ReplyKeyboardMarkup(
+        [
             [
-                BotCommand(
-                    "start",
-                    "Bot শুরু করুন",
-                ),
-                BotCommand(
-                    "admin",
-                    "Admin Panel",
-                ),
+                KeyboardButton("🎬 ভিডিও যোগ"),
+                KeyboardButton("📸 ফটো যোগ"),
             ],
-            scope=BotCommandScopeChat(
-                chat_id=ADMIN_ID
-            ),
-        )
-
-    except Exception as e:
-
-        logger.warning(
-            "Admin command menu error: %s",
-            e,
-        )
+            [
+                KeyboardButton("🎵 অডিও যোগ"),
+                KeyboardButton("📁 Category"),
+            ],
+            [
+                KeyboardButton("➕ Category যোগ"),
+                KeyboardButton("🗑 Delete"),
+            ],
+            [
+                KeyboardButton("👥 Users"),
+                KeyboardButton("📦 All Media"),
+            ],
+        ],
+        resize_keyboard=True,
+    )
 
 
 # =========================================================
@@ -425,539 +257,599 @@ async def setup_commands(application):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    if update.effective_user:
+    user = update.effective_user
 
-        try:
+    await save_contact(user)
 
-            await save_contact(
-                update.effective_user
-            )
-
-        except Exception as e:
-
-            logger.warning(
-                "Start contact save failed: %s",
-                e,
-            )
-
-    keyboard = [
-
-        [
-            InlineKeyboardButton(
-                "🎬 ভিডিও",
-                callback_data="cat:🎬 ভিডিও",
-            ),
-            InlineKeyboardButton(
-                "🎵 গান",
-                callback_data="cat:🎵 গান",
-            ),
-        ],
-
-        [
-            InlineKeyboardButton(
-                "🎭 নাটক",
-                callback_data="cat:🎭 নাটক",
-            ),
-            InlineKeyboardButton(
-                "📸 ফটো",
-                callback_data="cat:📸 ফটো",
-            ),
-        ],
-
-        [
-            InlineKeyboardButton(
-                "🎥 মুভি",
-                callback_data="cat:🎥 মুভি",
-            ),
-        ],
-    ]
+    keyboard = await category_keyboard()
 
     await update.message.reply_text(
-
         "🔥 Bangla Vibe\n\n"
         "স্বাগতম!\n"
         "নিচের Category থেকে Content নির্বাচন করুন।",
-
-        reply_markup=InlineKeyboardMarkup(
-            keyboard
-        ),
+        reply_markup=keyboard,
     )
 
 
-# =========================================================
-# ADMIN PANEL
-# =========================================================
+async def category_keyboard():
 
-async def admin_command(update, context):
+    pool = await get_pool()
 
-    if not update.effective_user:
-
-        return
-
-    if not is_admin(
-        update.effective_user.id
-    ):
-
-        await update.message.reply_text(
-            "⛔ এই Command শুধুমাত্র Admin-এর জন্য।"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name FROM categories ORDER BY id"
         )
 
+    await pool.close()
+
+    buttons = []
+
+    for row in rows:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    row["name"],
+                    callback_data=f"cat:{row['id']}",
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(buttons)
+
+
+# =========================================================
+# ADMIN
+# =========================================================
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not is_admin(update.effective_user.id):
         return
 
-    keyboard = [
-
-        [
-            InlineKeyboardButton(
-                "🎬 ভিডিও যোগ",
-                callback_data="admin_add_video",
-            ),
-            InlineKeyboardButton(
-                "📸 ছবি যোগ",
-                callback_data="admin_add_photo",
-            ),
-        ],
-
-        [
-            InlineKeyboardButton(
-                "🎵 অডিও যোগ",
-                callback_data="admin_add_audio",
-            ),
-            InlineKeyboardButton(
-                "📁 Category",
-                callback_data="admin_categories",
-            ),
-        ],
-
-        [
-            InlineKeyboardButton(
-                "🗑 Media Delete",
-                callback_data="admin_delete",
-            ),
-        ],
-
-        [
-            InlineKeyboardButton(
-                "👥 Users",
-                callback_data="admin_users",
-            ),
-            InlineKeyboardButton(
-                "📊 All Media",
-                callback_data="admin_all_media",
-            ),
-        ],
-    ]
-
     await update.message.reply_text(
-
         "👑 Admin Panel\n\n"
-        "এখান থেকে Content Manage করতে পারবে।",
-
-        reply_markup=InlineKeyboardMarkup(
-            keyboard
-        ),
+        "নিচের অপশন নির্বাচন করুন।",
+        reply_markup=admin_keyboard(),
     )
 
 
-# =========================================================
-# NATURAL COMMANDS
-# =========================================================
+async def admin_button_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-def is_video_command(text):
+    if not is_admin(update.effective_user.id):
+        return
 
-    t = normalize(text)
+    text = (update.message.text or "").strip()
 
-    commands = [
+    # -----------------------------------------
+    # ADD VIDEO
+    # -----------------------------------------
 
+    if text in [
+        "🎬 ভিডিও যোগ",
         "ভিডিও দাও",
         "ভিডিও দেও",
         "ভিডিও দে",
         "ভিডিও দেন",
         "ভিডিও দিন",
-
         "video dao",
         "video deo",
         "video de",
         "video den",
-
         "add video",
         "upload video",
-    ]
+    ]:
+        context.user_data.clear()
+        context.user_data["media_step"] = "media"
+        context.user_data["media_type"] = "video"
 
-    return any(
-        x in t
-        for x in commands
-    )
-
-
-def is_photo_command(text):
-
-    t = normalize(text)
-
-    commands = [
-
-        "ছবি দাও",
-        "ছবি দেও",
-        "ছবি দে",
-        "ছবি দেন",
-        "ছবি দিন",
-
-        "photo dao",
-        "photo deo",
-        "photo de",
-        "photo den",
-
-        "add photo",
-        "upload photo",
-    ]
-
-    return any(
-        x in t
-        for x in commands
-    )
-
-
-def is_audio_command(text):
-
-    t = normalize(text)
-
-    commands = [
-
-        "গান দাও",
-        "গান দেও",
-        "গান দে",
-        "গান দেন",
-        "গান দিন",
-
-        "audio dao",
-        "audio deo",
-        "audio de",
-        "audio den",
-
-        "add audio",
-        "upload audio",
-    ]
-
-    return any(
-        x in t
-        for x in commands
-    )
-
-
-# =========================================================
-# START MEDIA ADD
-# =========================================================
-
-async def start_add_media(
-    update,
-    context,
-    media_type,
-):
-
-    user_id = update.effective_user.id
-
-    if not is_admin(user_id):
-
-        if update.callback_query:
-
-            await update.callback_query.answer(
-                "⛔ Admin only",
-                show_alert=True,
-            )
-
+        await update.message.reply_text(
+            "🎬 Video পাঠাও।"
+        )
         return
 
-    clear_state(
-        context,
-        user_id,
-    )
+    # -----------------------------------------
+    # ADD PHOTO
+    # -----------------------------------------
 
-    set_state(
-        context,
-        user_id,
-        {
-            "action": "add_media",
+    if text in [
+        "📸 ফটো যোগ",
+        "ফটো দাও",
+        "ছবি দাও",
+        "add photo",
+        "upload photo",
+    ]:
+        context.user_data.clear()
+        context.user_data["media_step"] = "media"
+        context.user_data["media_type"] = "photo"
 
-            "media_type": media_type,
-
-            "step": "media",
-
-            "file_id": None,
-
-            "thumbnail_file_id": None,
-
-            "title": None,
-
-            "description": None,
-
-            "category": None,
-        },
-    )
-
-    if media_type == "video":
-
-        message = "🎬 ভিডিও যোগ করা হচ্ছে।"
-
-    elif media_type == "photo":
-
-        message = "📸 ছবি যোগ করা হচ্ছে।"
-
-    else:
-
-        message = "🎵 অডিও যোগ করা হচ্ছে।"
-
-    if update.callback_query:
-
-        await update.callback_query.message.reply_text(
-
-            message
-            + "\n\n"
-            + "1️⃣ প্রথমে মূল Content পাঠাও।"
-
+        await update.message.reply_text(
+            "📸 Photo পাঠাও।"
         )
+        return
+
+    # -----------------------------------------
+    # ADD AUDIO
+    # -----------------------------------------
+
+    if text in [
+        "🎵 অডিও যোগ",
+        "অডিও দাও",
+        "গান দাও",
+        "add audio",
+        "upload audio",
+    ]:
+        context.user_data.clear()
+        context.user_data["media_step"] = "media"
+        context.user_data["media_type"] = "audio"
+
+        await update.message.reply_text(
+            "🎵 Audio পাঠাও।"
+        )
+        return
+
+    # -----------------------------------------
+    # CATEGORY LIST
+    # -----------------------------------------
+
+    if text == "📁 Category":
+
+        keyboard = await category_keyboard()
+
+        await update.message.reply_text(
+            "📁 Category নির্বাচন করুন:",
+            reply_markup=keyboard,
+        )
+        return
+
+    # -----------------------------------------
+    # ADD CATEGORY
+    # -----------------------------------------
+
+    if text in [
+        "➕ Category যোগ",
+        "category add",
+        "add category",
+    ]:
+        context.user_data.clear()
+        context.user_data["category_step"] = True
+
+        await update.message.reply_text(
+            "➕ নতুন Category-এর নাম লিখুন।"
+        )
+        return
+
+    # -----------------------------------------
+    # USERS
+    # -----------------------------------------
+
+    if text == "👥 Users":
+
+        pool = await get_pool()
+
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM contacts"
+            )
+
+        await pool.close()
+
+        await update.message.reply_text(
+            f"👥 Total Users: {count}"
+        )
+        return
+
+    # -----------------------------------------
+    # ALL MEDIA
+    # -----------------------------------------
+
+    if text == "📦 All Media":
+
+        pool = await get_pool()
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, media_type, title, category
+                FROM media
+                ORDER BY id DESC
+                LIMIT 50
+                """
+            )
+
+        await pool.close()
+
+        if not rows:
+            await update.message.reply_text(
+                "📦 কোনো Media নেই।"
+            )
+            return
+
+        msg = "📦 All Media\n\n"
+
+        for row in rows:
+            msg += (
+                f"ID: {row['id']}\n"
+                f"Type: {row['media_type']}\n"
+                f"Title: {row['title']}\n"
+                f"Category: {row['category'] or 'None'}\n\n"
+            )
+
+        await update.message.reply_text(msg)
+        return
+
+    # -----------------------------------------
+    # DELETE
+    # -----------------------------------------
+
+    if text == "🗑 Delete":
+
+        context.user_data.clear()
+        context.user_data["delete_step"] = True
+
+        await update.message.reply_text(
+            "🗑 যে Media delete করতে চান তার ID লিখুন।"
+        )
+        return
 
 
 # =========================================================
-# MAIN MEDIA HANDLER
+# MEDIA UPLOAD HANDLER
 # =========================================================
 
-async def handle_admin_media_file(
-    update,
-    context,
-):
+async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user_id = update.effective_user.id
+    if not is_admin(update.effective_user.id):
+        return
 
-    if not is_admin(user_id):
+    step = context.user_data.get("media_step")
 
-        return False
+    if step != "media":
+        return
 
-    state = get_state(
-        context,
-        user_id,
-    )
-
-    if not state:
-
-        return False
-
-    if state.get("action") != "add_media":
-
-        return False
-
-    if state.get("step") != "media":
-
-        return False
-
-    media_type = state.get(
-        "media_type"
-    )
+    media_type = context.user_data.get("media_type")
 
     file_id = None
 
-    if (
-        media_type == "video"
-        and update.message.video
-    ):
-
+    if media_type == "video" and update.message.video:
         file_id = update.message.video.file_id
 
-    elif (
-        media_type == "photo"
-        and update.message.photo
-    ):
-
-        file_id = update.message.photo[-1].file_id
-
-    elif (
-        media_type == "audio"
-        and update.message.audio
-    ):
-
+    elif media_type == "audio" and update.message.audio:
         file_id = update.message.audio.file_id
 
+    elif media_type == "photo" and update.message.photo:
+        file_id = update.message.photo[-1].file_id
+
     if not file_id:
+        await update.message.reply_text(
+            "⚠️ সঠিক Media পাঠাও।"
+        )
+        return
 
-        return False
-
-    state["file_id"] = file_id
-
-    state["step"] = "thumbnail"
-
-    set_state(
-        context,
-        user_id,
-        state,
-    )
+    context.user_data["file_id"] = file_id
+    context.user_data["media_step"] = "thumbnail"
 
     await update.message.reply_text(
-
-        "✅ মূল Content পেয়েছি।\n\n"
-
-        "🖼️ এখন Thumbnail পাঠাও।\n\n"
-
-        "⚠️ Thumbnail দেওয়া বাধ্যতামূলক।\n"
-        "`skip` দিলে গ্রহণ করা হবে না।"
-
+        "✅ Content পেয়েছি।\n\n"
+        "1️⃣ এখন Thumbnail পাঠাও।\n"
+        "⚠️ Thumbnail দেওয়া বাধ্যতামূলক।"
     )
-
-    return True
 
 
 # =========================================================
-# THUMBNAIL HANDLER
+# THUMBNAIL
 # =========================================================
 
-async def handle_thumbnail(
-    update,
-    context,
-):
+async def thumbnail_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user_id = update.effective_user.id
+    if not is_admin(update.effective_user.id):
+        return
 
-    if not is_admin(user_id):
+    if context.user_data.get("media_step") != "thumbnail":
+        return
 
-        return False
-
-    state = get_state(
-        context,
-        user_id,
-    )
-
-    if not state:
-
-        return False
-
-    if state.get("action") != "add_media":
-
-        return False
-
-    if state.get("step") != "thumbnail":
-
-        return False
-
-    thumbnail_id = None
+    thumb_id = None
 
     if update.message.photo:
+        thumb_id = update.message.photo[-1].file_id
 
-        thumbnail_id = (
-            update.message.photo[-1].file_id
+    elif (
+        update.message.document
+        and update.message.document.mime_type
+        and update.message.document.mime_type.startswith("image/")
+    ):
+        thumb_id = update.message.document.file_id
+
+    if not thumb_id:
+        await update.message.reply_text(
+            "⚠️ Thumbnail হিসেবে একটি Photo/Image পাঠাও।"
         )
+        return
 
-    elif update.message.document:
-
-        mime = (
-            update.message.document.mime_type
-            or ""
-        )
-
-        if mime.startswith("image/"):
-
-            thumbnail_id = (
-                update.message.document.file_id
-            )
-
-    if not thumbnail_id:
-
-        return False
-
-    state["thumbnail_file_id"] = thumbnail_id
-
-    state["step"] = "title"
-
-    set_state(
-        context,
-        user_id,
-        state,
-    )
+    context.user_data["thumbnail_file_id"] = thumb_id
+    context.user_data["media_step"] = "title"
 
     await update.message.reply_text(
-
         "✅ Thumbnail পেয়েছি।\n\n"
-
-        "2️⃣ এখন Content-এর Title লিখো।\n\n"
-
+        "2️⃣ এখন Content-এর Title লিখো।\n"
         "⚠️ Title অবশ্যই দিতে হবে।"
-
     )
 
-    return True
+
+# =========================================================
+# TEXT STATE HANDLER
+# =========================================================
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not update.message:
+        return
+
+    user = update.effective_user
+
+    await save_contact(user)
+
+    text = (update.message.text or "").strip()
+
+    # ============================================
+    # ADMIN ADD CATEGORY
+    # ============================================
+
+    if is_admin(user.id) and context.user_data.get("category_step"):
+
+        if not text:
+            return
+
+        pool = await get_pool()
+
+        try:
+            await pool.execute(
+                """
+                INSERT INTO categories(name)
+                VALUES($1)
+                ON CONFLICT(name) DO NOTHING
+                """,
+                text,
+            )
+
+            await update.message.reply_text(
+                f"✅ Category যোগ হয়েছে:\n\n{text}",
+                reply_markup=admin_keyboard(),
+            )
+
+        except Exception as e:
+            logger.error(e)
+
+            await update.message.reply_text(
+                "❌ Category যোগ করতে সমস্যা হয়েছে।"
+            )
+
+        finally:
+            await pool.close()
+
+        context.user_data.clear()
+        return
+
+    # ============================================
+    # DELETE MEDIA
+    # ============================================
+
+    if is_admin(user.id) and context.user_data.get("delete_step"):
+
+        try:
+            media_id = int(text)
+
+            pool = await get_pool()
+
+            result = await pool.execute(
+                "DELETE FROM media WHERE id=$1",
+                media_id,
+            )
+
+            await pool.close()
+
+            if result == "DELETE 1":
+                await update.message.reply_text(
+                    f"✅ Media ID {media_id} delete হয়েছে।",
+                    reply_markup=admin_keyboard(),
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ এই ID পাওয়া যায়নি।"
+                )
+
+        except:
+            await update.message.reply_text(
+                "⚠️ সঠিক Media ID লিখুন।"
+            )
+
+        context.user_data.clear()
+        return
+
+    # ============================================
+    # MEDIA TITLE
+    # ============================================
+
+    if is_admin(user.id) and context.user_data.get("media_step") == "title":
+
+        if not text:
+            await update.message.reply_text(
+                "⚠️ Title অবশ্যই দিতে হবে।"
+            )
+            return
+
+        context.user_data["title"] = text
+        context.user_data["media_step"] = "description"
+
+        await update.message.reply_text(
+            "3️⃣ Description লিখুন।\n\n"
+            "Description না চাইলে শুধু `skip` লিখুন।"
+        )
+        return
+
+    # ============================================
+    # MEDIA DESCRIPTION
+    # ============================================
+
+    if is_admin(user.id) and context.user_data.get("media_step") == "description":
+
+        if text.lower() == "skip":
+            context.user_data["description"] = ""
+        else:
+            context.user_data["description"] = text
+
+        context.user_data["media_step"] = "category"
+
+        keyboard = await admin_category_buttons()
+
+        await update.message.reply_text(
+            "4️⃣ 📁 Category নির্বাচন করুন:",
+            reply_markup=keyboard,
+        )
+        return
+
+    # ============================================
+    # NATURAL ADMIN COMMANDS
+    # ============================================
+
+    if is_admin(user.id):
+
+        low = text.lower()
+
+        if (
+            "facebook" in low
+            and ("admin" in low or "এডমিন" in text)
+        ):
+            await send_social(update, "facebook")
+            return
+
+        if (
+            "tiktok" in low
+            and ("admin" in low or "এডমিন" in text)
+        ):
+            await send_social(update, "tiktok")
+            return
+
+        await admin_button_text(update, context)
 
 
 # =========================================================
-# GET CATEGORIES
+# ADMIN CATEGORY BUTTONS
 # =========================================================
 
-async def get_categories():
+async def admin_category_buttons():
 
-    conn = await db_connect()
+    pool = await get_pool()
 
-    try:
-
+    async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
-            SELECT id, name
-            FROM categories
-            ORDER BY id
-            """
+            "SELECT id, name FROM categories ORDER BY id"
         )
 
-        return [
-            {
-                "id": row["id"],
-                "name": row["name"],
-            }
-            for row in rows
-        ]
+    await pool.close()
 
-    finally:
+    buttons = []
 
-        await conn.close()
+    for row in rows:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    row["name"],
+                    callback_data=f"choosecat:{row['id']}",
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(buttons)
 
 
 # =========================================================
-# GET CATEGORY BY ID
+# CATEGORY CALLBACK
 # =========================================================
 
-async def get_category_by_id(
-    category_id
-):
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    conn = await db_connect()
+    query = update.callback_query
+    await query.answer()
 
-    try:
+    data = query.data
 
-        return await conn.fetchrow(
-            """
-            SELECT id, name
-            FROM categories
-            WHERE id = $1
-            """,
+    # ============================================
+    # ADMIN SELECT CATEGORY
+    # ============================================
+
+    if data.startswith("choosecat:"):
+
+        if not is_admin(query.from_user.id):
+            await query.answer(
+                "শুধু Admin ব্যবহার করতে পারবেন।",
+                show_alert=True,
+            )
+            return
+
+        if context.user_data.get("media_step") != "category":
+            await query.edit_message_text(
+                "⚠️ এখন কোনো Media যোগ করার কাজ চলছে না।"
+            )
+            return
+
+        try:
+            category_id = int(data.split(":")[1])
+        except:
+            return
+
+        await finish_media(
+            update,
+            context,
             category_id,
         )
+        return
 
-    finally:
+    # ============================================
+    # USER CATEGORY
+    # ============================================
 
-        await conn.close()
+    if data.startswith("cat:"):
+
+        try:
+            category_id = int(data.split(":")[1])
+        except:
+            return
+
+        await show_category(
+            update,
+            category_id,
+        )
+        return
 
 
 # =========================================================
 # SAVE MEDIA
 # =========================================================
 
-async def save_media(
-    state,
-    user_id,
-):
+async def finish_media(update, context, category_id):
 
-    conn = await db_connect()
+    query = update.callback_query
 
-    try:
+    pool = await get_pool()
 
-        row = await conn.fetchrow(
+    async with pool.acquire() as conn:
 
+        category_name = await conn.fetchval(
+            "SELECT name FROM categories WHERE id=$1",
+            category_id,
+        )
+
+        if not category_name:
+            await pool.close()
+
+            await query.edit_message_text(
+                "❌ Category পাওয়া যায়নি।"
+            )
+            return
+
+        media_id = await conn.fetchval(
             """
-            INSERT INTO media
-            (
+            INSERT INTO media(
                 media_type,
                 file_id,
                 thumbnail_file_id,
@@ -966,229 +858,26 @@ async def save_media(
                 category,
                 created_by
             )
-            VALUES
-            (
-                $1,
-                $2,
-                $3,
-                $4,
-                $5,
-                $6,
-                $7
-            )
+            VALUES($1,$2,$3,$4,$5,$6,$7)
             RETURNING id
             """,
-
-            state["media_type"],
-
-            state["file_id"],
-
-            state["thumbnail_file_id"],
-
-            state["title"],
-
-            state.get("description")
-            or "",
-
-            state["category"],
-
-            user_id,
+            context.user_data["media_type"],
+            context.user_data["file_id"],
+            context.user_data["thumbnail_file_id"],
+            context.user_data["title"],
+            context.user_data.get("description", ""),
+            category_name,
+            ADMIN_ID,
         )
 
-        return row["id"]
+    await pool.close()
 
-    finally:
+    context.user_data.clear()
 
-        await conn.close()
-
-
-# =========================================================
-# FINISH MEDIA
-# =========================================================
-
-async def finish_media(
-    update,
-    context,
-    category,
-):
-
-    query = update.callback_query
-
-    user_id = query.from_user.id
-
-    if not is_admin(user_id):
-
-        await query.answer(
-            "⛔ Admin only",
-            show_alert=True,
-        )
-
-        return
-
-    state = get_state(
-        context,
-        user_id,
-    )
-
-    if not state:
-
-        await query.answer(
-            "Session পাওয়া যায়নি। আবার শুরু করো।",
-            show_alert=True,
-        )
-
-        return
-
-    if state.get("action") != "add_media":
-
-        await query.answer(
-            "কোনো Media add session নেই।",
-            show_alert=True,
-        )
-
-        return
-
-    if state.get("step") != "category":
-
-        await query.answer(
-            "আগের ধাপগুলো সম্পূর্ণ করো।",
-            show_alert=True,
-        )
-
-        return
-
-    if not state.get("file_id"):
-
-        await query.answer(
-            "মূল Content পাওয়া যায়নি।",
-            show_alert=True,
-        )
-
-        return
-
-    if not state.get("thumbnail_file_id"):
-
-        await query.answer(
-            "Thumbnail বাধ্যতামূলক।",
-            show_alert=True,
-        )
-
-        return
-
-    if not state.get("title"):
-
-        await query.answer(
-            "Title বাধ্যতামূলক।",
-            show_alert=True,
-        )
-
-        return
-
-    category_row = await get_category_by_id(
-        category
-    )
-
-    if not category_row:
-
-        await query.answer(
-            "Category পাওয়া যায়নি।",
-            show_alert=True,
-        )
-
-        return
-
-    category_name = category_row["name"]
-
-    state["category"] = category_name
-
-    media_id = await save_media(
-        state,
-        user_id,
-    )
-
-    title = state["title"]
-
-    clear_state(
-        context,
-        user_id,
-    )
-
-    await query.answer(
-        "✅ Saved"
-    )
-
-    await query.message.reply_text(
-
+    await query.edit_message_text(
         "✅ Content সফলভাবে যোগ হয়েছে!\n\n"
-
-        f"🆔 Media ID: {media_id}\n"
-
-        f"📁 Category: {category_name}\n"
-
-        f"📝 Title: {title}\n\n"
-
-        "User এখন এটি দেখতে পারবে।"
-
-    )
-
-
-# =========================================================
-# CATEGORY CALLBACK
-# =========================================================
-
-async def category_callback(
-    update,
-    context,
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    category = query.data.replace(
-        "cat:",
-        "",
-        1,
-    )
-
-    await show_category(
-        query.message,
-        category,
-    )
-
-
-async def choose_category_callback(
-    update,
-    context,
-):
-
-    query = update.callback_query
-
-    category_id_text = query.data.replace(
-        "choosecat:",
-        "",
-        1,
-    )
-
-    try:
-
-        category_id = int(
-            category_id_text
-        )
-
-    except ValueError:
-
-        await query.answer(
-            "Invalid Category",
-            show_alert=True,
-        )
-
-        return
-
-    await finish_media(
-        update,
-        context,
-        category_id,
+        f"🆔 ID: {media_id}\n"
+        f"📁 Category: {category_name}"
     )
 
 
@@ -1196,1975 +885,286 @@ async def choose_category_callback(
 # SHOW CATEGORY
 # =========================================================
 
-async def show_category(
-    message,
-    category,
-):
-
-    conn = await db_connect()
-
-    try:
-
-        rows = await conn.fetch(
-
-            """
-            SELECT
-                id,
-                media_type,
-                title,
-                description,
-                thumbnail_file_id
-            FROM media
-            WHERE category = $1
-            ORDER BY id DESC
-            LIMIT 30
-            """,
-
-            category,
-        )
-
-    finally:
-
-        await conn.close()
-
-    if not rows:
-
-        await message.reply_text(
-
-            f"📁 {category}\n\n"
-            "এখনো কোনো Content যোগ করা হয়নি।"
-
-        )
-
-        return
-
-    for row in rows:
-
-        keyboard = [
-
-            [
-                InlineKeyboardButton(
-
-                    "🔒 Content দেখুন",
-
-                    web_app=WebAppInfo(
-
-                        url=(
-                            f"{WEB_URL}/app"
-                            f"?id={row['id']}"
-                        )
-
-                    ),
-                )
-            ]
-        ]
-
-        title = row["title"]
-
-        caption = (
-
-            f"🔒 {title}\n\n"
-
-            "কনটেন্ট দেখতে নিচের Button চাপুন।\n\n"
-
-            "📢 প্রথমে বিজ্ঞাপনের পেজ খুলবে।"
-
-        )
-
-        thumb = row[
-            "thumbnail_file_id"
-        ]
-
-        try:
-
-            if thumb:
-
-                await message.reply_photo(
-
-                    photo=thumb,
-
-                    caption=caption,
-
-                    reply_markup=(
-                        InlineKeyboardMarkup(
-                            keyboard
-                        )
-                    ),
-                )
-
-            else:
-
-                await message.reply_text(
-
-                    caption,
-
-                    reply_markup=(
-                        InlineKeyboardMarkup(
-                            keyboard
-                        )
-                    ),
-                )
-
-        except Exception as e:
-
-            logger.warning(
-                "Thumbnail send failed: %s",
-                e,
-            )
-
-            await message.reply_text(
-
-                caption,
-
-                reply_markup=(
-                    InlineKeyboardMarkup(
-                        keyboard
-                    )
-                ),
-            )
-
-
-# =========================================================
-# ADMIN CATEGORY
-# =========================================================
-
-async def admin_categories(
-    update,
-    context,
-):
-
-    categories = await get_categories()
-
-    keyboard = [
-
-        [
-            InlineKeyboardButton(
-                "➕ Category যোগ",
-                callback_data="admin_add_category",
-            )
-        ]
-    ]
-
-    text = "📁 Categories\n\n"
-
-    for category in categories:
-
-        text += (
-            f"🆔 {category['id']} - "
-            f"{category['name']}\n"
-        )
-
-    await update.callback_query.message.reply_text(
-
-        text,
-
-        reply_markup=InlineKeyboardMarkup(
-            keyboard
-        ),
-    )
-
-
-async def add_category_start(
-    update,
-    context,
-):
-
-    user_id = update.effective_user.id
-
-    if not is_admin(user_id):
-
-        return
-
-    set_state(
-        context,
-        user_id,
-        {
-            "action": "add_category"
-        },
-    )
-
-    await update.callback_query.message.reply_text(
-
-        "📁 নতুন Category-এর নাম লিখো।\n\n"
-        "উদাহরণ: 🔥 Trending"
-
-    )
-
-
-async def add_category_text(
-    update,
-    context,
-):
-
-    user_id = update.effective_user.id
-
-    if not is_admin(user_id):
-
-        return False
-
-    state = get_state(
-        context,
-        user_id,
-    )
-
-    if not state:
-
-        return False
-
-    if state.get("action") != "add_category":
-
-        return False
-
-    category = (
-        update.message.text or ""
-    ).strip()
-
-    if not category:
-
-        await update.message.reply_text(
-            "⚠️ Category-এর নাম লিখো।"
-        )
-
-        return True
-
-    conn = await db_connect()
-
-    try:
-
-        await conn.execute(
-
-            """
-            INSERT INTO categories (name)
-            VALUES ($1)
-            ON CONFLICT (name)
-            DO NOTHING
-            """,
-
-            category,
-        )
-
-    finally:
-
-        await conn.close()
-
-    clear_state(
-        context,
-        user_id,
-    )
-
-    await update.message.reply_text(
-
-        f"✅ Category যোগ হয়েছে:\n"
-        f"{category}"
-
-    )
-
-    return True
-
-
-# =========================================================
-# ADMIN USERS
-# =========================================================
-
-async def admin_users(
-    update,
-    context,
-):
-
-    conn = await db_connect()
-
-    try:
-
-        count = await conn.fetchval(
-            "SELECT COUNT(*) FROM contacts"
-        )
-
-    finally:
-
-        await conn.close()
-
-    await update.callback_query.message.reply_text(
-
-        f"👥 Total Users: {count}"
-
-    )
-
-
-# =========================================================
-# ALL MEDIA
-# =========================================================
-
-async def admin_all_media(
-    update,
-    context,
-):
-
-    conn = await db_connect()
-
-    try:
-
-        rows = await conn.fetch(
-
-            """
-            SELECT
-                id,
-                title,
-                media_type,
-                category
-            FROM media
-            ORDER BY id DESC
-            LIMIT 50
-            """
-
-        )
-
-    finally:
-
-        await conn.close()
-
-    if not rows:
-
-        await update.callback_query.message.reply_text(
-            "কোনো Media নেই।"
-        )
-
-        return
-
-    text = "📊 All Media\n\n"
-
-    for row in rows:
-
-        text += (
-
-            f"🆔 {row['id']} | "
-            f"{row['media_type']} | "
-            f"{row['category'] or 'No Category'}\n"
-
-            f"📝 {row['title']}\n\n"
-
-        )
-
-    await update.callback_query.message.reply_text(
-        text
-    )
-
-
-# =========================================================
-# DELETE MENU
-# =========================================================
-
-async def admin_delete_menu(
-    update,
-    context,
-):
-
-    conn = await db_connect()
-
-    try:
-
-        rows = await conn.fetch(
-
-            """
-            SELECT
-                id,
-                title
-            FROM media
-            ORDER BY id DESC
-            LIMIT 30
-            """
-
-        )
-
-    finally:
-
-        await conn.close()
-
-    if not rows:
-
-        await update.callback_query.message.reply_text(
-
-            "Delete করার মতো Media নেই।"
-
-        )
-
-        return
-
-    keyboard = []
-
-    for row in rows:
-
-        title = row["title"] or ""
-
-        keyboard.append(
-
-            [
-
-                InlineKeyboardButton(
-
-                    f"🗑 {row['id']} - "
-                    f"{title[:25]}",
-
-                    callback_data=(
-                        f"delete:{row['id']}"
-                    ),
-
-                )
-
-            ]
-
-        )
-
-    await update.callback_query.message.reply_text(
-
-        "🗑 কোন Content Delete করবে?",
-
-        reply_markup=InlineKeyboardMarkup(
-            keyboard
-        ),
-
-    )
-
-
-async def delete_media(
-    update,
-    context,
-):
+async def show_category(update, category_id):
 
     query = update.callback_query
 
-    if not is_admin(
-        query.from_user.id
-    ):
+    pool = await get_pool()
 
-        await query.answer(
+    async with pool.acquire() as conn:
 
-            "⛔ Admin only",
-
-            show_alert=True,
-
+        category = await conn.fetchval(
+            "SELECT name FROM categories WHERE id=$1",
+            category_id,
         )
 
+        rows = await conn.fetch(
+            """
+            SELECT id, media_type, file_id, thumbnail_file_id,
+                   title, description
+            FROM media
+            WHERE category=$1
+            ORDER BY id DESC
+            """,
+            category,
+        )
+
+    await pool.close()
+
+    if not rows:
+
+        await query.edit_message_text(
+            f"📁 {category}\n\n"
+            "এই Category-তে এখনো কোনো Content নেই।"
+        )
         return
 
-    try:
+    await query.edit_message_text(
+        f"📁 {category}\n\n"
+        f"মোট Content: {len(rows)}"
+    )
 
-        media_id = int(
+    for row in rows:
 
-            query.data.replace(
-                "delete:",
-                "",
-                1,
+        media_id = row["id"]
+        title = row["title"]
+        description = row["description"] or ""
+
+        caption = (
+            f"🔥 Bangla Vibe\n\n"
+            f"🎬 {title}\n"
+        )
+
+        if description:
+            caption += f"\n{description}"
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "▶️ Content দেখুন",
+                        web_app=__import__(
+                            "telegram"
+                        ).WebAppInfo(
+                            url=f"{WEB_URL}/app?media_id={media_id}"
+                        ),
+                    )
+                ]
+            ]
+        )
+
+        # Thumbnail থাকলে thumbnail-ই Telegram-এ দেখাবে
+        if row["thumbnail_file_id"]:
+
+            try:
+                await query.message.reply_photo(
+                    photo=row["thumbnail_file_id"],
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
+            except Exception as e:
+                logger.error(
+                    "thumbnail send error: %s",
+                    e,
+                )
+
+        else:
+            await query.message.reply_text(
+                caption,
+                reply_markup=keyboard,
             )
-
-        )
-
-    except ValueError:
-
-        await query.answer(
-            "Invalid Media ID",
-            show_alert=True,
-        )
-
-        return
-
-    conn = await db_connect()
-
-    try:
-
-        result = await conn.execute(
-
-            "DELETE FROM media WHERE id = $1",
-
-            media_id,
-
-        )
-
-    finally:
-
-        await conn.close()
-
-    await query.answer(
-        "Deleted"
-    )
-
-    await query.message.reply_text(
-
-        f"🗑 Media ID {media_id} delete করা হয়েছে।"
-
-    )
 
 
 # =========================================================
 # SOCIAL LINKS
 # =========================================================
 
-async def save_social(
-    platform,
-    value,
-):
+async def send_social(update, platform):
 
-    conn = await db_connect()
+    pool = await get_pool()
 
-    try:
-
-        await conn.execute(
-
-            """
-            INSERT INTO social_links
-            (
-                platform,
-                value
-            )
-            VALUES ($1, $2)
-
-            ON CONFLICT (platform)
-            DO UPDATE SET
-                value = EXCLUDED.value
-            """,
-
-            platform,
-            value,
-
-        )
-
-    finally:
-
-        await conn.close()
-
-
-async def get_social(
-    platform,
-):
-
-    conn = await db_connect()
-
-    try:
-
-        return await conn.fetchval(
-
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
             """
             SELECT value
             FROM social_links
-            WHERE platform = $1
+            WHERE platform=$1
+            ORDER BY id DESC
+            LIMIT 1
             """,
-
             platform,
-
         )
 
-    finally:
+    await pool.close()
 
-        await conn.close()
-
-
-# =========================================================
-# TEXT HANDLER
-# =========================================================
-
-async def text_handler(
-    update,
-    context,
-):
-
-    if not update.message:
-
-        return
-
-    if not update.message.text:
-
-        return
-
-    user_id = update.effective_user.id
-
-    text = update.message.text.strip()
-
-    # =====================================================
-    # ADMIN STATE FIRST
-    # =====================================================
-
-    if is_admin(user_id):
-
-        state = get_state(
-            context,
-            user_id,
-        )
-
-        if state:
-
-            # -------------------------------------------------
-            # ADD CATEGORY
-            # -------------------------------------------------
-
-            if state.get(
-                "action"
-            ) == "add_category":
-
-                if await add_category_text(
-                    update,
-                    context,
-                ):
-
-                    return
-
-            # -------------------------------------------------
-            # ADD MEDIA
-            # -------------------------------------------------
-
-            if state.get(
-                "action"
-            ) == "add_media":
-
-                step = state.get(
-                    "step"
-                )
-
-                # =============================================
-                # TITLE
-                # =============================================
-
-                if step == "title":
-
-                    title = text.strip()
-
-                    if not title:
-
-                        await update.message.reply_text(
-
-                            "⚠️ Title খালি রাখা যাবে না।\n\n"
-                            "📝 একটি Title লিখো।"
-
-                        )
-
-                        return
-
-                    state["title"] = title
-
-                    state["step"] = "description"
-
-                    set_state(
-                        context,
-                        user_id,
-                        state,
-                    )
-
-                    await update.message.reply_text(
-
-                        "✅ Title নেওয়া হয়েছে।\n\n"
-
-                        "3️⃣ এখন Description লিখো।\n\n"
-
-                        "Description না চাইলে শুধু `skip` লিখো।"
-
-                    )
-
-                    return
-
-                # =============================================
-                # DESCRIPTION
-                # =============================================
-
-                if step == "description":
-
-                    if normalize(text) == "skip":
-
-                        state["description"] = ""
-
-                    else:
-
-                        state["description"] = text
-
-                    state["step"] = "category"
-
-                    set_state(
-                        context,
-                        user_id,
-                        state,
-                    )
-
-                    categories = await get_categories()
-
-                    if not categories:
-
-                        await update.message.reply_text(
-
-                            "❌ কোনো Category পাওয়া যায়নি।"
-
-                        )
-
-                        return
-
-                    keyboard = []
-
-                    for category in categories:
-
-                        keyboard.append(
-
-                            [
-
-                                InlineKeyboardButton(
-
-                                    category["name"],
-
-                                    callback_data=(
-
-                                        "choosecat:"
-                                        + str(
-                                            category["id"]
-                                        )
-
-                                    ),
-
-                                )
-
-                            ]
-
-                        )
-
-                    await update.message.reply_text(
-
-                        "4️⃣ 📁 Category নির্বাচন করো:",
-
-                        reply_markup=(
-                            InlineKeyboardMarkup(
-                                keyboard
-                            )
-                        ),
-
-                    )
-
-                    return
-
-                # =============================================
-                # THUMBNAIL
-                # =============================================
-
-                if step == "thumbnail":
-
-                    await update.message.reply_text(
-
-                        "⚠️ Thumbnail বাধ্যতামূলক।\n\n"
-
-                        "🖼️ একটি ছবি পাঠাও।\n\n"
-
-                        "`skip` দিয়ে এই ধাপ বাদ দেওয়া যাবে না।"
-
-                    )
-
-                    return
-
-                # =============================================
-                # CATEGORY
-                # =============================================
-
-                if step == "category":
-
-                    await update.message.reply_text(
-
-                        "📁 উপরের Category Button থেকে "
-                        "একটি Category নির্বাচন করো।"
-
-                    )
-
-                    return
-
-                # =============================================
-                # MAIN MEDIA
-                # =============================================
-
-                if step == "media":
-
-                    await update.message.reply_text(
-
-                        "🎬 আগে মূল Content পাঠাও।"
-
-                    )
-
-                    return
-
-    # =====================================================
-    # CONTACT SAVE
-    # State handling-এর পরে
-    # =====================================================
-
-    try:
-
-        await save_contact(
-            update.effective_user
-        )
-
-    except Exception as e:
-
-        logger.warning(
-            "Contact save failed: %s",
-            e,
-        )
-
-    # =====================================================
-    # ADMIN NATURAL COMMANDS
-    # =====================================================
-
-    if is_admin(user_id):
-
-        # -------------------------------------------------
-        # VIDEO
-        # -------------------------------------------------
-
-        if is_video_command(text):
-
-            clear_state(
-                context,
-                user_id,
-            )
-
-            set_state(
-
-                context,
-
-                user_id,
-
-                {
-
-                    "action": "add_media",
-
-                    "media_type": "video",
-
-                    "step": "media",
-
-                    "file_id": None,
-
-                    "thumbnail_file_id": None,
-
-                    "title": None,
-
-                    "description": None,
-
-                    "category": None,
-
-                },
-
-            )
-
-            await update.message.reply_text(
-
-                "🎬 ভিডিও যোগ করা হচ্ছে।\n\n"
-                "1️⃣ প্রথমে মূল Video পাঠাও।"
-
-            )
-
-            return
-
-        # -------------------------------------------------
-        # PHOTO
-        # -------------------------------------------------
-
-        if is_photo_command(text):
-
-            clear_state(
-                context,
-                user_id,
-            )
-
-            set_state(
-
-                context,
-
-                user_id,
-
-                {
-
-                    "action": "add_media",
-
-                    "media_type": "photo",
-
-                    "step": "media",
-
-                    "file_id": None,
-
-                    "thumbnail_file_id": None,
-
-                    "title": None,
-
-                    "description": None,
-
-                    "category": None,
-
-                },
-
-            )
-
-            await update.message.reply_text(
-
-                "📸 ছবি যোগ করা হচ্ছে।\n\n"
-                "1️⃣ প্রথমে মূল Photo পাঠাও।"
-
-            )
-
-            return
-
-        # -------------------------------------------------
-        # AUDIO
-        # -------------------------------------------------
-
-        if is_audio_command(text):
-
-            clear_state(
-                context,
-                user_id,
-            )
-
-            set_state(
-
-                context,
-
-                user_id,
-
-                {
-
-                    "action": "add_media",
-
-                    "media_type": "audio",
-
-                    "step": "media",
-
-                    "file_id": None,
-
-                    "thumbnail_file_id": None,
-
-                    "title": None,
-
-                    "description": None,
-
-                    "category": None,
-
-                },
-
-            )
-
-            await update.message.reply_text(
-
-                "🎵 অডিও যোগ করা হচ্ছে।\n\n"
-                "1️⃣ প্রথমে Audio পাঠাও।"
-
-            )
-
-            return
-
-    # =====================================================
-    # SOCIAL LINKS
-    # =====================================================
-
-    t = normalize(text)
-
-    if t in [
-
-        "এডমিন ফেসবুক আইডি দাও",
-
-        "এডমিন ফেসবুক আইডি দেন",
-
-        "admin facebook dao",
-
-        "admin facebook den",
-
-    ]:
-
-        value = await get_social(
-            "facebook"
-        )
-
-        if value:
-
-            await update.message.reply_text(
-
-                f"📘 Admin Facebook:\n{value}"
-
-            )
-
-        else:
-
-            await update.message.reply_text(
-
-                "Facebook ID এখনো দেওয়া হয়নি।"
-
-            )
-
-        return
-
-    if t in [
-
-        "এডমিন টিকটক আইডি দাও",
-
-        "এডমিন টিকটক আইডি দেন",
-
-        "admin tiktok dao",
-
-        "admin tiktok den",
-
-    ]:
-
-        value = await get_social(
-            "tiktok"
-        )
-
-        if value:
-
-            await update.message.reply_text(
-
-                f"🎵 Admin TikTok:\n{value}"
-
-            )
-
-        else:
-
-            await update.message.reply_text(
-
-                "TikTok ID এখনো দেওয়া হয়নি।"
-
-            )
-
-        return
-
-
-# =========================================================
-# MEDIA MESSAGE HANDLER
-# =========================================================
-
-async def media_handler(
-    update,
-    context,
-):
-
-    if not update.message:
-
-        return
-
-    user_id = update.effective_user.id
-
-    if not is_admin(user_id):
-
-        return
-
-    state = get_state(
-        context,
-        user_id,
-    )
-
-    if not state:
-
-        return
-
-    if state.get(
-        "action"
-    ) != "add_media":
-
-        return
-
-    step = state.get(
-        "step"
-    )
-
-    # =====================================================
-    # MAIN MEDIA
-    # =====================================================
-
-    if step == "media":
-
-        handled = await handle_admin_media_file(
-            update,
-            context,
-        )
-
-        if handled:
-
-            return
-
+    if row:
         await update.message.reply_text(
-
-            "⚠️ সঠিক Content পাঠাও।"
-
+            f"📱 Admin {platform.title()}:\n\n"
+            f"{row['value']}"
         )
-
-        return
-
-    # =====================================================
-    # THUMBNAIL
-    # =====================================================
-
-    if step == "thumbnail":
-
-        handled = await handle_thumbnail(
-            update,
-            context,
-        )
-
-        if handled:
-
-            return
-
+    else:
         await update.message.reply_text(
-
-            "⚠️ এখন Thumbnail দিতে হবে।\n\n"
-            "🖼️ একটি ছবি পাঠাও।\n\n"
-            "Thumbnail দেওয়া বাধ্যতামূলক।"
-
-        )
-
-        return
-
-    # =====================================================
-    # TITLE
-    # =====================================================
-
-    if step == "title":
-
-        await update.message.reply_text(
-
-            "📝 এখন Title লিখো।"
-
-        )
-
-        return
-
-    # =====================================================
-    # DESCRIPTION
-    # =====================================================
-
-    if step == "description":
-
-        await update.message.reply_text(
-
-            "📄 এখন Description লিখো "
-            "অথবা `skip` লিখো।"
-
-        )
-
-        return
-
-    # =====================================================
-    # CATEGORY
-    # =====================================================
-
-    if step == "category":
-
-        await update.message.reply_text(
-
-            "📁 Category Button থেকে "
-            "একটি Category নির্বাচন করো।"
-
-        )
-
-        return
-
-
-# =========================================================
-# CALLBACK ROUTER
-# =========================================================
-
-async def callback_router(
-    update,
-    context,
-):
-
-    query = update.callback_query
-
-    data = query.data or ""
-
-    # -----------------------------------------------------
-    # USER CATEGORY
-    # -----------------------------------------------------
-
-    if data.startswith("cat:"):
-
-        await category_callback(
-            update,
-            context,
-        )
-
-        return
-
-    # -----------------------------------------------------
-    # ADMIN CATEGORY SELECT
-    # -----------------------------------------------------
-
-    if data.startswith("choosecat:"):
-
-        await choose_category_callback(
-            update,
-            context,
-        )
-
-        return
-
-    # -----------------------------------------------------
-    # ADMIN
-    # -----------------------------------------------------
-
-    if data.startswith("admin_"):
-
-        if data == "admin_add_category":
-
-            if not is_admin(
-                query.from_user.id
-            ):
-
-                await query.answer(
-                    "⛔ Admin only",
-                    show_alert=True,
-                )
-
-                return
-
-            await query.answer()
-
-            await add_category_start(
-                update,
-                context,
-            )
-
-            return
-
-        await admin_callback(
-            update,
-            context,
-        )
-
-        return
-
-    # -----------------------------------------------------
-    # DELETE
-    # -----------------------------------------------------
-
-    if data.startswith("delete:"):
-
-        await delete_media(
-            update,
-            context,
-        )
-
-        return
-
-    await query.answer()
-
-
-# =========================================================
-# ADMIN CALLBACK
-# =========================================================
-
-async def admin_callback(
-    update,
-    context,
-):
-
-    query = update.callback_query
-
-    user_id = query.from_user.id
-
-    if not is_admin(user_id):
-
-        await query.answer(
-
-            "⛔ Admin only",
-
-            show_alert=True,
-
-        )
-
-        return
-
-    await query.answer()
-
-    data = query.data
-
-    if data == "admin_add_video":
-
-        await start_add_media(
-            update,
-            context,
-            "video",
-        )
-
-    elif data == "admin_add_photo":
-
-        await start_add_media(
-            update,
-            context,
-            "photo",
-        )
-
-    elif data == "admin_add_audio":
-
-        await start_add_media(
-            update,
-            context,
-            "audio",
-        )
-
-    elif data == "admin_categories":
-
-        await admin_categories(
-            update,
-            context,
-        )
-
-    elif data == "admin_users":
-
-        await admin_users(
-            update,
-            context,
-        )
-
-    elif data == "admin_all_media":
-
-        await admin_all_media(
-            update,
-            context,
-        )
-
-    elif data == "admin_delete":
-
-        await admin_delete_menu(
-            update,
-            context,
+            f"❌ এখনো Admin {platform.title()} দেওয়া হয়নি।"
         )
 
 
 # =========================================================
-# TELEGRAM FILE URL
+# TELEGRAM FILE PROXY
 # =========================================================
 
-def telegram_file_url(
-    file_id
-):
-
-    url = (
-
-        "https://api.telegram.org/bot"
-
-        + BOT_TOKEN
-
-        + "/getFile?file_id="
-
-        + urllib.parse.quote(
-            file_id
-        )
-
-    )
-
-    with urllib.request.urlopen(
-        url,
-        timeout=30,
-    ) as response:
-
-        data = response.read().decode(
-            "utf-8"
-        )
-
-    result = json.loads(data)
-
-    if not result.get("ok"):
-
-        raise RuntimeError(
-            "Telegram getFile failed"
-        )
-
-    file_path = result[
-        "result"
-    ][
-        "file_path"
-    ]
-
-    return (
-
-        "https://api.telegram.org/file/bot"
-
-        + BOT_TOKEN
-
-        + "/"
-
-        + file_path
-
-    )
-
-
-# =========================================================
-# DB HELPER FOR FLASK
-# =========================================================
-
-def run_db(coro):
+def run_async(coro):
 
     loop = asyncio.new_event_loop()
 
     try:
-
         asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(
-            coro
-        )
-
+        return loop.run_until_complete(coro)
     finally:
-
-        asyncio.set_event_loop(None)
-
         loop.close()
 
 
-# =========================================================
-# HOME
-# =========================================================
+async def get_file_bytes(file_id):
 
-@app.route("/")
-def home():
+    from telegram import Bot
 
-    return "Bangla Vibe Bot is running."
+    bot = Bot(BOT_TOKEN)
+
+    tg_file = await bot.get_file(file_id)
+
+    data = await tg_file.download_as_bytearray()
+
+    return bytes(data)
 
 
-# =========================================================
-# HEALTH
-# =========================================================
+@app.route("/thumbnail/<int:media_id>")
+def thumbnail(media_id):
 
-@app.route("/health")
-def health():
+    async def fetch():
+
+        pool = await get_pool()
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT thumbnail_file_id
+                FROM media
+                WHERE id=$1
+                """,
+                media_id,
+            )
+
+        await pool.close()
+
+        return row
+
+    row = run_async(fetch())
+
+    if not row or not row["thumbnail_file_id"]:
+        return "Not Found", 404
+
+    data = run_async(
+        get_file_bytes(row["thumbnail_file_id"])
+    )
+
+    return Response(
+        data,
+        mimetype="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=3600"
+        },
+    )
+
+
+@app.route("/api/media/<int:media_id>")
+def api_media(media_id):
+
+    async def fetch():
+
+        pool = await get_pool()
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, media_type, title,
+                       description, category,
+                       thumbnail_file_id
+                FROM media
+                WHERE id=$1
+                """,
+                media_id,
+            )
+
+        await pool.close()
+
+        return row
+
+    row = run_async(fetch())
+
+    if not row:
+        return jsonify({"error": "Media not found"}), 404
 
     return jsonify(
         {
-            "status": "ok"
+            "id": row["id"],
+            "type": row["media_type"],
+            "title": row["title"],
+            "description": row["description"] or "",
+            "category": row["category"] or "",
+            "thumbnail": (
+                f"{WEB_URL}/thumbnail/{row['id']}"
+                if row["thumbnail_file_id"]
+                else None
+            ),
         }
     )
 
 
-# =========================================================
-# WEB APP
-# =========================================================
+@app.route("/media/<media_type>/<int:media_id>")
+def media_file(media_type, media_id):
 
-@app.route("/app")
-def web_app():
+    async def fetch():
 
-    file_path = os.path.join(
+        pool = await get_pool()
 
-        os.path.dirname(__file__),
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT media_type, file_id
+                FROM media
+                WHERE id=$1
+                """,
+                media_id,
+            )
 
-        "index.html",
+        await pool.close()
 
+        return row
+
+    row = run_async(fetch())
+
+    if not row:
+        return "Not Found", 404
+
+    if row["media_type"] != media_type:
+        return "Wrong media type", 400
+
+    data = run_async(
+        get_file_bytes(row["file_id"])
     )
 
-    if not os.path.exists(
-        file_path
-    ):
-
-        return (
-            "index.html not found",
-            404,
-        )
-
-    with open(
-        file_path,
-        "r",
-        encoding="utf-8",
-    ) as f:
-
-        return f.read()
-
-
-# =========================================================
-# FETCH MEDIA
-# =========================================================
-
-async def fetch_media(
-    media_id
-):
-
-    conn = await db_connect()
-
-    try:
-
-        return await conn.fetchrow(
-
-            """
-            SELECT
-                id,
-                media_type,
-                file_id,
-                thumbnail_file_id,
-                title,
-                description,
-                category
-            FROM media
-            WHERE id = $1
-            """,
-
-            media_id,
-
-        )
-
-    finally:
-
-        await conn.close()
-
-
-# =========================================================
-# API MEDIA
-# =========================================================
-
-@app.route(
-    "/api/media/<int:media_id>"
-)
-def api_media(
-    media_id
-):
-
-    try:
-
-        row = run_db(
-            fetch_media(media_id)
-        )
-
-        if not row:
-
-            return jsonify(
-                {
-                    "error": "Media not found"
-                }
-            ), 404
-
-        return jsonify(
-
-            {
-
-                "id": row["id"],
-
-                "media_type": row[
-                    "media_type"
-                ],
-
-                "title": row[
-                    "title"
-                ],
-
-                "description": (
-                    row["description"]
-                    or ""
-                ),
-
-                "category": (
-                    row["category"]
-                    or ""
-                ),
-
-                "thumbnail_url": (
-
-                    f"/thumbnail/{row['id']}"
-
-                    if row[
-                        "thumbnail_file_id"
-                    ]
-
-                    else ""
-
-                ),
-
-                "media_url": (
-
-                    f"/media/"
-                    f"{row['media_type']}/"
-                    f"{row['id']}"
-
-                ),
-
-            }
-
-        )
-
-    except Exception as e:
-
-        logger.exception(
-            "API error"
-        )
-
-        return jsonify(
-            {
-                "error": str(e)
-            }
-        ), 500
-
-
-# =========================================================
-# FETCH THUMBNAIL
-# =========================================================
-
-async def fetch_thumbnail(
-    media_id
-):
-
-    conn = await db_connect()
-
-    try:
-
-        return await conn.fetchrow(
-
-            """
-            SELECT
-                thumbnail_file_id
-            FROM media
-            WHERE id = $1
-            """,
-
-            media_id,
-
-        )
-
-    finally:
-
-        await conn.close()
-
-
-# =========================================================
-# THUMBNAIL PROXY
-# =========================================================
-
-@app.route(
-    "/thumbnail/<int:media_id>"
-)
-def thumbnail_proxy(
-    media_id
-):
-
-    try:
-
-        row = run_db(
-
-            fetch_thumbnail(
-                media_id
-            )
-
-        )
-
-        if not row:
-
-            return (
-                "Thumbnail not found",
-                404,
-            )
-
-        if not row[
-            "thumbnail_file_id"
-        ]:
-
-            return (
-                "Thumbnail not found",
-                404,
-            )
-
-        url = telegram_file_url(
-
-            row[
-                "thumbnail_file_id"
-            ]
-
-        )
-
-        req = urllib.request.Request(
-
-            url,
-
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            },
-
-        )
-
-        response = urllib.request.urlopen(
-
-            req,
-
-            timeout=60,
-
-        )
-
-        content = response.read()
-
-        content_type = response.headers.get(
-
-            "Content-Type",
-
-            "image/jpeg",
-
-        )
-
-        response.close()
-
-        return Response(
-
-            content,
-
-            content_type=content_type,
-
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Thumbnail proxy error"
-        )
-
-        return (
-            "Thumbnail error",
-            500,
-        )
-
-
-# =========================================================
-# FETCH MEDIA FILE
-# =========================================================
-
-async def fetch_media_file(
-    media_id
-):
-
-    conn = await db_connect()
-
-    try:
-
-        return await conn.fetchrow(
-
-            """
-            SELECT
-                file_id,
-                media_type
-            FROM media
-            WHERE id = $1
-            """,
-
-            media_id,
-
-        )
-
-    finally:
-
-        await conn.close()
-
-
-# =========================================================
-# MEDIA PROXY
-# =========================================================
-
-@app.route(
-    "/media/<media_type>/<int:media_id>"
-)
-def media_proxy(
-    media_type,
-    media_id,
-):
-
-    try:
-
-        row = run_db(
-
-            fetch_media_file(
-                media_id
-            )
-
-        )
-
-        if not row:
-
-            return (
-                "Media not found",
-                404,
-            )
-
-        if row[
-            "media_type"
-        ] != media_type:
-
-            return (
-                "Invalid media type",
-                400,
-            )
-
-        telegram_url = telegram_file_url(
-
-            row[
-                "file_id"
-            ]
-
-        )
-
-        headers = {
-
-            "User-Agent":
-                "Mozilla/5.0"
-
-        }
-
-        range_header = request.headers.get(
-            "Range"
-        )
-
-        if range_header:
-
-            headers["Range"] = range_header
-
-        req = urllib.request.Request(
-
-            telegram_url,
-
-            headers=headers,
-
-        )
-
-        upstream = urllib.request.urlopen(
-
-            req,
-
-            timeout=120,
-
-        )
-
-        content_type = upstream.headers.get(
-
-            "Content-Type",
-
-            "application/octet-stream",
-
-        )
-
-        status = upstream.status
-
-        response_headers = {}
-
-        for header in [
-
-            "Content-Length",
-
-            "Content-Range",
-
-            "Accept-Ranges",
-
-            "Last-Modified",
-
-            "ETag",
-
-        ]:
-
-            value = upstream.headers.get(
-                header
-            )
-
-            if value:
-
-                response_headers[
-                    header
-                ] = value
-
-        def generate():
-
-            try:
-
-                while True:
-
-                    chunk = upstream.read(
-                        1024 * 1024
-                    )
-
-                    if not chunk:
-
-                        break
-
-                    yield chunk
-
-            finally:
-
-                try:
-
-                    upstream.close()
-
-                except Exception:
-
-                    pass
-
-        return Response(
-
-            generate(),
-
-            status=status,
-
-            headers=response_headers,
-
-            content_type=content_type,
-
-        )
-
-    except Exception as e:
-
-        logger.exception(
-            "Media proxy error: %s",
-            e,
-        )
-
-        return (
-            "Media playback error",
-            500,
-        )
-
-
-# =========================================================
-# FLASK ERROR
-# =========================================================
-
-@app.errorhandler(Exception)
-def flask_error(
-    error
-):
-
-    logger.exception(
-        "Flask error: %s",
-        error,
-    )
-
-    return jsonify(
-        {
-            "error": "Server error"
-        }
-    ), 500
-
-
-# =========================================================
-# FLASK THREAD
-# =========================================================
-
-def run_flask():
-
-    app.run(
-
-        host="0.0.0.0",
-
-        port=PORT,
-
-        debug=False,
-
-        threaded=True,
-
-        use_reloader=False,
-
-    )
-
-
-# =========================================================
-# POST INIT
-# =========================================================
-
-async def post_init(
-    application
-):
-
-    await init_db()
-
-    await setup_commands(
-        application
-    )
-
-    logger.info(
-        "🤖 Bangla Vibe Bot started..."
+    mime = {
+        "video": "video/mp4",
+        "audio": "audio/mpeg",
+        "photo": "image/jpeg",
+    }.get(media_type, "application/octet-stream")
+
+    return Response(
+        data,
+        mimetype=mime,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=3600",
+        },
     )
 
 
@@ -3172,129 +1172,114 @@ async def post_init(
 # MAIN
 # =========================================================
 
-def main():
+async def post_init(application):
 
-    # -----------------------------------------------------
-    # FLASK SERVER
-    # -----------------------------------------------------
+    await init_db()
 
-    Thread(
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "Start Bangla Vibe"),
+            BotCommand("admin", "Admin Panel"),
+        ]
+    )
 
-        target=run_flask,
+    try:
+        await application.bot.set_my_commands(
+            [
+                BotCommand("start", "Start Bangla Vibe"),
+                BotCommand("admin", "Admin Panel"),
+            ],
+            scope=BotCommandScopeChat(
+                chat_id=ADMIN_ID
+            ),
+        )
+    except Exception as e:
+        logger.warning(
+            "Admin command scope error: %s",
+            e,
+        )
 
-        daemon=True,
 
-    ).start()
+def run_flask():
 
-    # -----------------------------------------------------
-    # TELEGRAM APPLICATION
-    # -----------------------------------------------------
+    port = int(os.environ.get("PORT", "10000"))
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False,
+    )
+
+
+async def main():
 
     application = (
-
         Application.builder()
-
         .token(BOT_TOKEN)
-
         .post_init(post_init)
-
         .build()
-
     )
 
-    # -----------------------------------------------------
-    # COMMANDS
-    # -----------------------------------------------------
-
+    # Commands
     application.add_handler(
-
-        CommandHandler(
-            "start",
-            start,
-        )
-
+        CommandHandler("start", start)
     )
 
     application.add_handler(
-
-        CommandHandler(
-            "admin",
-            admin_command,
-        )
-
+        CommandHandler("admin", admin_command)
     )
 
-    # -----------------------------------------------------
-    # CALLBACK
-    # -----------------------------------------------------
-
+    # Callback buttons
     application.add_handler(
-
-        CallbackQueryHandler(
-            callback_router,
-        )
-
+        CallbackQueryHandler(callback_handler)
     )
 
-    # -----------------------------------------------------
-    # MEDIA
-    # -----------------------------------------------------
-
+    # Thumbnail handler আগে
     application.add_handler(
-
         MessageHandler(
+            filters.PHOTO |
+            filters.Document.IMAGE,
+            thumbnail_handler,
+        ),
+        group=0,
+    )
 
-            filters.PHOTO
-            | filters.VIDEO
-            | filters.AUDIO
-            | filters.Document.IMAGE,
-
+    # Main media handler
+    application.add_handler(
+        MessageHandler(
+            filters.VIDEO |
+            filters.AUDIO,
             media_handler,
-
-        )
-
+        ),
+        group=1,
     )
 
-    # -----------------------------------------------------
-    # TEXT
-    # -----------------------------------------------------
-
+    # Text/state/admin handler
     application.add_handler(
-
         MessageHandler(
-
-            filters.TEXT
-            & ~filters.COMMAND,
-
+            filters.TEXT & ~filters.COMMAND,
             text_handler,
-
-        )
-
+        ),
+        group=2,
     )
 
-    logger.info(
-
-        "🌐 Web server: http://0.0.0.0:%s",
-
-        PORT,
-
+    flask_thread = asyncio.to_thread(
+        run_flask
     )
 
-    # -----------------------------------------------------
-    # START POLLING
-    # -----------------------------------------------------
-
-    application.run_polling(
-
-        allowed_updates=Update.ALL_TYPES
-
+    await asyncio.gather(
+        flask_thread,
+        application.run_polling(
+            drop_pending_updates=True
+        ),
     )
 
-
-# =========================================================
-# RUN
-# =========================================================
 
 if __name__ == "__main__":
 
-    main()
+    try:
+        asyncio.run(main())
+
+    except KeyboardInterrupt:
+        print("Bot stopped.")
