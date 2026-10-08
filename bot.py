@@ -3,6 +3,7 @@ import asyncio
 import logging
 import urllib.request
 import urllib.parse
+import json
 from threading import Thread
 
 import asyncpg
@@ -58,16 +59,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# =========================================================
-# FLASK
-# =========================================================
-
 app = Flask(__name__)
+
 
 # =========================================================
 # DATABASE
 # =========================================================
-
 
 async def db_connect():
     return await asyncpg.connect(DATABASE_URL)
@@ -127,16 +124,45 @@ async def init_db():
             )
         """)
 
-        # Existing old contacts table migration
-        try:
-            await conn.execute("""
-                ALTER TABLE contacts
-                ADD COLUMN IF NOT EXISTS user_id BIGINT
-            """)
-        except Exception:
-            pass
+        # =====================================================
+        # SAFE MIGRATIONS
+        # =====================================================
 
-        # Default categories
+        await conn.execute("""
+            ALTER TABLE media
+            ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT
+        """)
+
+        await conn.execute("""
+            ALTER TABLE media
+            ADD COLUMN IF NOT EXISTS description TEXT
+        """)
+
+        await conn.execute("""
+            ALTER TABLE media
+            ADD COLUMN IF NOT EXISTS category TEXT
+        """)
+
+        await conn.execute("""
+            ALTER TABLE media
+            ADD COLUMN IF NOT EXISTS created_by BIGINT
+        """)
+
+        await conn.execute("""
+            ALTER TABLE media
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP
+        """)
+
+        await conn.execute("""
+            ALTER TABLE contacts
+            ADD COLUMN IF NOT EXISTS user_id BIGINT
+        """)
+
+        # =====================================================
+        # DEFAULT CATEGORIES
+        # =====================================================
+
         default_categories = [
             "🎵 গান",
             "🎭 নাটক",
@@ -161,20 +187,9 @@ async def init_db():
     logger.info("Database initialized")
 
 
-def get_db_sync():
-    loop = asyncio.new_event_loop()
-
-    try:
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(db_connect())
-    finally:
-        asyncio.set_event_loop(None)
-
-
 # =========================================================
 # HELPERS
 # =========================================================
-
 
 def is_admin(user_id):
     return int(user_id) == ADMIN_ID
@@ -218,7 +233,8 @@ async def save_contact(user):
     try:
         await conn.execute(
             """
-            INSERT INTO contacts (user_id, first_name, username)
+            INSERT INTO contacts
+            (user_id, first_name, username)
             VALUES ($1, $2, $3)
             ON CONFLICT (user_id)
             DO UPDATE SET
@@ -237,31 +253,32 @@ async def save_contact(user):
 # COMMAND MENU
 # =========================================================
 
-
 async def setup_commands(application):
 
-    # Normal users
     await application.bot.set_my_commands([
         BotCommand("start", "Bot শুরু করুন"),
     ])
 
-    # Admin account gets /admin too
     try:
         await application.bot.set_my_commands(
             [
                 BotCommand("start", "Bot শুরু করুন"),
                 BotCommand("admin", "Admin Panel"),
             ],
-            scope=BotCommandScopeChat(chat_id=ADMIN_ID),
+            scope=BotCommandScopeChat(
+                chat_id=ADMIN_ID
+            ),
         )
     except Exception as e:
-        logger.warning("Could not set admin command menu: %s", e)
+        logger.warning(
+            "Admin command menu error: %s",
+            e,
+        )
 
 
 # =========================================================
 # START
 # =========================================================
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -309,10 +326,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ADMIN PANEL
 # =========================================================
 
-
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    if not update.effective_user or not is_admin(update.effective_user.id):
+    if not update.effective_user or not is_admin(
+        update.effective_user.id
+    ):
         await update.message.reply_text(
             "⛔ এই Command শুধুমাত্র Admin-এর জন্য।"
         )
@@ -365,9 +383,8 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# NATURAL ADMIN COMMAND
+# NATURAL COMMAND
 # =========================================================
-
 
 def is_video_command(text):
     t = normalize(text)
@@ -426,9 +443,8 @@ def is_audio_command(text):
 
 
 # =========================================================
-# ADMIN ADD MEDIA
+# START ADD MEDIA
 # =========================================================
-
 
 async def start_add_media(update, context, media_type):
 
@@ -450,6 +466,11 @@ async def start_add_media(update, context, media_type):
         {
             "action": "add_media",
             "media_type": media_type,
+
+            # IMPORTANT:
+            # Explicit step system
+            "step": "media",
+
             "file_id": None,
             "thumbnail_file_id": None,
             "title": None,
@@ -458,33 +479,42 @@ async def start_add_media(update, context, media_type):
         },
     )
 
-    message = (
-        "🎬 ভিডিও যোগ করা হচ্ছে।"
-        if media_type == "video"
-        else
-        "📸 ছবি যোগ করা হচ্ছে।"
-        if media_type == "photo"
-        else
-        "🎵 অডিও যোগ করা হচ্ছে।"
-    )
+    if media_type == "video":
+        message = "🎬 ভিডিও যোগ করা হচ্ছে।"
+    elif media_type == "photo":
+        message = "📸 ছবি যোগ করা হচ্ছে।"
+    else:
+        message = "🎵 অডিও যোগ করা হচ্ছে।"
 
-    await update.callback_query.message.reply_text(
-        message
-        + "\n\n"
-        + "1️⃣ প্রথমে মূল Content পাঠাও।"
-    )
+    if update.callback_query:
+        await update.callback_query.message.reply_text(
+            message
+            + "\n\n"
+            + "1️⃣ প্রথমে মূল Content পাঠাও।"
+        )
 
+
+# =========================================================
+# MAIN MEDIA HANDLER
+# =========================================================
 
 async def handle_admin_media_file(update, context):
 
     user_id = update.effective_user.id
 
     if not is_admin(user_id):
-        return
+        return False
 
     state = get_state(context, user_id)
 
-    if not state or state.get("action") != "add_media":
+    if not state:
+        return False
+
+    if state.get("action") != "add_media":
+        return False
+
+    # Only accept main media at media step
+    if state.get("step") != "media":
         return False
 
     media_type = state["media_type"]
@@ -504,23 +534,29 @@ async def handle_admin_media_file(update, context):
         return False
 
     state["file_id"] = file_id
-    set_state(context, user_id, state)
 
-    if media_type == "video":
-        await update.message.reply_text(
-            "✅ ভিডিও পেয়েছি।\n\n"
-            "🖼 এখন ভিডিওর Thumbnail পাঠাও।\n\n"
-            "Thumbnail না থাকলে একটি ছবি পাঠালেও হবে।"
-        )
-    else:
-        await update.message.reply_text(
-            "✅ Content পেয়েছি।\n\n"
-            "🖼 এখন Thumbnail পাঠাও।\n\n"
-            "Thumbnail না চাইলে `skip` লিখতে পারো।"
-        )
+    # Move to thumbnail step
+    state["step"] = "thumbnail"
+
+    set_state(
+        context,
+        user_id,
+        state,
+    )
+
+    await update.message.reply_text(
+        "✅ মূল Content পেয়েছি।\n\n"
+        "🖼️ এখন Thumbnail পাঠাও।\n\n"
+        "⚠️ Thumbnail দেওয়া বাধ্যতামূলক।\n"
+        "`skip` দিলে গ্রহণ করা হবে না।"
+    )
 
     return True
 
+
+# =========================================================
+# THUMBNAIL HANDLER
+# =========================================================
 
 async def handle_thumbnail(update, context):
 
@@ -531,7 +567,14 @@ async def handle_thumbnail(update, context):
 
     state = get_state(context, user_id)
 
-    if not state or state.get("action") != "add_media":
+    if not state:
+        return False
+
+    if state.get("action") != "add_media":
+        return False
+
+    # Thumbnail accepted ONLY in thumbnail step
+    if state.get("step") != "thumbnail":
         return False
 
     thumbnail_id = None
@@ -545,26 +588,32 @@ async def handle_thumbnail(update, context):
         if mime.startswith("image/"):
             thumbnail_id = update.message.document.file_id
 
-    if thumbnail_id:
-        state["thumbnail_file_id"] = thumbnail_id
-        state["step"] = "title"
+    if not thumbnail_id:
+        return False
 
-        set_state(context, user_id, state)
+    state["thumbnail_file_id"] = thumbnail_id
 
-        await update.message.reply_text(
-            "✅ Thumbnail পেয়েছি।\n\n"
-            "📝 এখন ভিডিও/Content-এর Title লিখো।"
-        )
+    # Move to title
+    state["step"] = "title"
 
-        return True
+    set_state(
+        context,
+        user_id,
+        state,
+    )
 
-    return False
+    await update.message.reply_text(
+        "✅ Thumbnail পেয়েছি।\n\n"
+        "2️⃣ এখন Content-এর Title লিখো।\n\n"
+        "⚠️ Title অবশ্যই দিতে হবে।"
+    )
+
+    return True
 
 
 # =========================================================
 # TEXT STATE HANDLER
 # =========================================================
-
 
 async def handle_state_text(update, context):
 
@@ -580,7 +629,14 @@ async def handle_state_text(update, context):
 
     text = (update.message.text or "").strip()
 
-    if text.lower() == "cancel":
+    if not text:
+        return True
+
+    # =====================================================
+    # CANCEL
+    # =====================================================
+
+    if normalize(text) == "cancel":
         clear_state(context, user_id)
 
         await update.message.reply_text(
@@ -589,69 +645,126 @@ async def handle_state_text(update, context):
 
         return True
 
+    # =====================================================
+    # ADD MEDIA
+    # =====================================================
+
     if state.get("action") == "add_media":
 
-        # Thumbnail skip
-        if not state.get("thumbnail_file_id"):
-            if text.lower() == "skip":
-                state["step"] = "title"
+        step = state.get("step")
 
-                set_state(context, user_id, state)
+        # -------------------------------------------------
+        # THUMBNAIL STEP
+        # -------------------------------------------------
 
-                await update.message.reply_text(
-                    "⏭ Thumbnail বাদ দেওয়া হয়েছে।\n\n"
-                    "📝 এখন Title লিখো।"
-                )
-
-                return True
-
-        # Title
-        if not state.get("title"):
-            state["title"] = text
-            state["step"] = "description"
-
-            set_state(context, user_id, state)
+        if step == "thumbnail":
 
             await update.message.reply_text(
-                "📝 Description লিখো।\n\n"
-                "না চাইলে `skip` লিখো।"
+                "⚠️ Thumbnail বাধ্যতামূলক।\n\n"
+                "🖼️ একটি ছবি পাঠাও।\n"
+                "`skip` দিয়ে এই ধাপ বাদ দেওয়া যাবে না।"
             )
 
             return True
 
-        # Description
-        if state.get("description") is None:
-            state["description"] = (
-                "" if text.lower() == "skip" else text
+        # -------------------------------------------------
+        # TITLE STEP
+        # -------------------------------------------------
+
+        if step == "title":
+
+            if not text:
+                await update.message.reply_text(
+                    "⚠️ Title খালি রাখা যাবে না।\n"
+                    "একটি Title লিখো।"
+                )
+                return True
+
+            state["title"] = text
+
+            # Move to description
+            state["step"] = "description"
+
+            set_state(
+                context,
+                user_id,
+                state,
             )
 
+            await update.message.reply_text(
+                "✅ Title নেওয়া হয়েছে।\n\n"
+                "3️⃣ এখন Description লিখো।\n\n"
+                "Description না চাইলে শুধু `skip` লিখো।"
+            )
+
+            return True
+
+        # -------------------------------------------------
+        # DESCRIPTION STEP
+        # -------------------------------------------------
+
+        if step == "description":
+
+            if normalize(text) == "skip":
+                state["description"] = ""
+            else:
+                state["description"] = text
+
+            # Move to category
             state["step"] = "category"
 
-            set_state(context, user_id, state)
+            set_state(
+                context,
+                user_id,
+                state,
+            )
 
             categories = await get_categories()
 
-            if categories:
-                keyboard = [
+            if not categories:
+                await update.message.reply_text(
+                    "❌ কোনো Category পাওয়া যায়নি।"
+                )
+                return True
+
+            keyboard = []
+
+            for category in categories:
+                keyboard.append(
                     [
                         InlineKeyboardButton(
-                            c,
-                            callback_data="choosecat:" + c,
+                            category,
+                            callback_data=(
+                                "choosecat:"
+                                + category
+                            ),
                         )
                     ]
-                    for c in categories
-                ]
+                )
 
-                await update.message.reply_text(
-                    "📁 Category নির্বাচন করো:",
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                )
-            else:
-                await update.message.reply_text(
-                    "📁 Category লিখো:"
-                )
+            await update.message.reply_text(
+                "4️⃣ 📁 Category নির্বাচন করো:",
+                reply_markup=InlineKeyboardMarkup(
+                    keyboard
+                ),
+            )
 
             return True
+
+        # -------------------------------------------------
+        # CATEGORY STEP
+        # -------------------------------------------------
+
+        if step == "category":
+
+            await update.message.reply_text(
+                "📁 উপরের Category Button থেকে "
+                "একটি Category নির্বাচন করো।"
+            )
+
+            return True
+
+        return True
 
     return False
 
@@ -660,17 +773,20 @@ async def handle_state_text(update, context):
 # CATEGORY
 # =========================================================
 
-
 async def get_categories():
 
     conn = await db_connect()
 
     try:
         rows = await conn.fetch(
-            "SELECT name FROM categories ORDER BY id"
+            """
+            SELECT name
+            FROM categories
+            ORDER BY id
+            """
         )
 
-        return [r["name"] for r in rows]
+        return [row["name"] for row in rows]
 
     finally:
         await conn.close()
@@ -698,10 +814,10 @@ async def save_media(state, user_id):
             """,
             state["media_type"],
             state["file_id"],
-            state.get("thumbnail_file_id"),
+            state["thumbnail_file_id"],
             state["title"],
             state.get("description") or "",
-            state.get("category") or "🎬 ভিডিও",
+            state["category"],
             user_id,
         )
 
@@ -713,28 +829,85 @@ async def save_media(state, user_id):
 
 async def finish_media(update, context, category):
 
-    user_id = update.effective_user.id
+    query = update.callback_query
+    user_id = query.from_user.id
 
     if not is_admin(user_id):
+        await query.answer(
+            "⛔ Admin only",
+            show_alert=True,
+        )
         return
 
     state = get_state(context, user_id)
 
-    if not state or state.get("action") != "add_media":
+    if not state:
+        await query.answer(
+            "Session পাওয়া যায়নি। আবার শুরু করো।",
+            show_alert=True,
+        )
+        return
+
+    if state.get("action") != "add_media":
+        await query.answer(
+            "কোনো Media add session নেই।",
+            show_alert=True,
+        )
+        return
+
+    # Must have everything
+    if state.get("step") != "category":
+        await query.answer(
+            "আগের ধাপগুলো সম্পূর্ণ করো।",
+            show_alert=True,
+        )
+        return
+
+    if not state.get("file_id"):
+        await query.answer(
+            "মূল Content পাওয়া যায়নি।",
+            show_alert=True,
+        )
+        return
+
+    if not state.get("thumbnail_file_id"):
+        await query.answer(
+            "Thumbnail বাধ্যতামূলক।",
+            show_alert=True,
+        )
+        return
+
+    if not state.get("title"):
+        await query.answer(
+            "Title বাধ্যতামূলক।",
+            show_alert=True,
+        )
         return
 
     state["category"] = category
 
-    media_id = await save_media(state, user_id)
+    media_id = await save_media(
+        state,
+        user_id,
+    )
 
-    clear_state(context, user_id)
+    title = state["title"]
 
-    await update.callback_query.message.reply_text(
+    clear_state(
+        context,
+        user_id,
+    )
+
+    await query.answer(
+        "✅ Saved"
+    )
+
+    await query.message.reply_text(
         "✅ Content সফলভাবে যোগ হয়েছে!\n\n"
         f"🆔 Media ID: {media_id}\n"
         f"📁 Category: {category}\n"
-        f"📝 Title: {state['title']}\n\n"
-        "এখন User এটি দেখতে পারবে।"
+        f"📝 Title: {title}\n\n"
+        "User এখন এটি দেখতে পারবে।"
     )
 
 
@@ -742,25 +915,37 @@ async def finish_media(update, context, category):
 # CATEGORY CALLBACK
 # =========================================================
 
-
 async def category_callback(update, context):
 
     query = update.callback_query
+
     await query.answer()
 
-    category = query.data.replace("cat:", "", 1)
+    category = query.data.replace(
+        "cat:",
+        "",
+        1,
+    )
 
-    await show_category(query.message, category)
+    await show_category(
+        query.message,
+        category,
+    )
 
 
 async def choose_category_callback(update, context):
 
     query = update.callback_query
-    await query.answer()
 
-    category = query.data.replace("choosecat:", "", 1)
-
-    await finish_media(update, context, category)
+    await finish_media(
+        update,
+        context,
+        query.data.replace(
+            "choosecat:",
+            "",
+            1,
+        ),
+    )
 
 
 async def show_category(message, category):
@@ -770,8 +955,12 @@ async def show_category(message, category):
     try:
         rows = await conn.fetch(
             """
-            SELECT id, media_type, title, description,
-                   thumbnail_file_id
+            SELECT
+                id,
+                media_type,
+                title,
+                description,
+                thumbnail_file_id
             FROM media
             WHERE category = $1
             ORDER BY id DESC
@@ -794,9 +983,12 @@ async def show_category(message, category):
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "🔒 ভিডিও/কনটেন্ট দেখুন",
+                    "🔒 Content দেখুন",
                     web_app=WebAppInfo(
-                        url=f"{WEB_URL}/app?id={row['id']}"
+                        url=(
+                            f"{WEB_URL}/app"
+                            f"?id={row['id']}"
+                        )
                     ),
                 )
             ]
@@ -813,24 +1005,38 @@ async def show_category(message, category):
         thumb = row["thumbnail_file_id"]
 
         try:
+
             if thumb:
+
                 await message.reply_photo(
                     photo=thumb,
                     caption=caption,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    reply_markup=InlineKeyboardMarkup(
+                        keyboard
+                    ),
                 )
+
             else:
+
                 await message.reply_text(
                     caption,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    reply_markup=InlineKeyboardMarkup(
+                        keyboard
+                    ),
                 )
 
         except Exception as e:
-            logger.warning("Thumbnail send failed: %s", e)
+
+            logger.warning(
+                "Thumbnail send failed: %s",
+                e,
+            )
 
             await message.reply_text(
                 caption,
-                reply_markup=InlineKeyboardMarkup(keyboard),
+                reply_markup=InlineKeyboardMarkup(
+                    keyboard
+                ),
             )
 
 
@@ -838,24 +1044,27 @@ async def show_category(message, category):
 # ADMIN CALLBACK
 # =========================================================
 
-
 async def admin_callback(update, context):
 
     query = update.callback_query
-    await query.answer()
 
     user_id = query.from_user.id
 
     if not is_admin(user_id):
+
         await query.answer(
             "⛔ Admin only",
             show_alert=True,
         )
+
         return
+
+    await query.answer()
 
     data = query.data
 
     if data == "admin_add_video":
+
         await start_add_media(
             update,
             context,
@@ -863,6 +1072,7 @@ async def admin_callback(update, context):
         )
 
     elif data == "admin_add_photo":
+
         await start_add_media(
             update,
             context,
@@ -870,6 +1080,7 @@ async def admin_callback(update, context):
         )
 
     elif data == "admin_add_audio":
+
         await start_add_media(
             update,
             context,
@@ -877,22 +1088,37 @@ async def admin_callback(update, context):
         )
 
     elif data == "admin_categories":
-        await admin_categories(update, context)
+
+        await admin_categories(
+            update,
+            context,
+        )
 
     elif data == "admin_users":
-        await admin_users(update, context)
+
+        await admin_users(
+            update,
+            context,
+        )
 
     elif data == "admin_all_media":
-        await admin_all_media(update, context)
+
+        await admin_all_media(
+            update,
+            context,
+        )
 
     elif data == "admin_delete":
-        await admin_delete_menu(update, context)
+
+        await admin_delete_menu(
+            update,
+            context,
+        )
 
 
 # =========================================================
 # ADMIN CATEGORY
 # =========================================================
-
 
 async def admin_categories(update, context):
 
@@ -910,7 +1136,9 @@ async def admin_categories(update, context):
     await update.callback_query.message.reply_text(
         "📁 Categories\n\n"
         + "\n".join(categories),
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
     )
 
 
@@ -941,7 +1169,10 @@ async def add_category_text(update, context):
     if not is_admin(user_id):
         return False
 
-    state = get_state(context, user_id)
+    state = get_state(
+        context,
+        user_id,
+    )
 
     if not state:
         return False
@@ -951,21 +1182,33 @@ async def add_category_text(update, context):
 
     category = update.message.text.strip()
 
+    if not category:
+        await update.message.reply_text(
+            "⚠️ Category-এর নাম লিখো।"
+        )
+        return True
+
     conn = await db_connect()
 
     try:
+
         await conn.execute(
             """
             INSERT INTO categories (name)
             VALUES ($1)
-            ON CONFLICT (name) DO NOTHING
+            ON CONFLICT (name)
+            DO NOTHING
             """,
             category,
         )
+
     finally:
         await conn.close()
 
-    clear_state(context, user_id)
+    clear_state(
+        context,
+        user_id,
+    )
 
     await update.message.reply_text(
         f"✅ Category যোগ হয়েছে:\n{category}"
@@ -978,15 +1221,16 @@ async def add_category_text(update, context):
 # ADMIN USERS
 # =========================================================
 
-
 async def admin_users(update, context):
 
     conn = await db_connect()
 
     try:
+
         count = await conn.fetchval(
             "SELECT COUNT(*) FROM contacts"
         )
+
     finally:
         await conn.close()
 
@@ -996,35 +1240,43 @@ async def admin_users(update, context):
 
 
 # =========================================================
-# ADMIN MEDIA LIST
+# ALL MEDIA
 # =========================================================
-
 
 async def admin_all_media(update, context):
 
     conn = await db_connect()
 
     try:
+
         rows = await conn.fetch(
             """
-            SELECT id, title, media_type, category
+            SELECT
+                id,
+                title,
+                media_type,
+                category
             FROM media
             ORDER BY id DESC
             LIMIT 50
             """
         )
+
     finally:
         await conn.close()
 
     if not rows:
+
         await update.callback_query.message.reply_text(
             "কোনো Media নেই।"
         )
+
         return
 
     text = "📊 All Media\n\n"
 
     for row in rows:
+
         text += (
             f"🆔 {row['id']} | "
             f"{row['media_type']} | "
@@ -1032,19 +1284,21 @@ async def admin_all_media(update, context):
             f"📝 {row['title']}\n\n"
         )
 
-    await update.callback_query.message.reply_text(text)
+    await update.callback_query.message.reply_text(
+        text
+    )
 
 
 # =========================================================
 # DELETE MEDIA
 # =========================================================
 
-
 async def admin_delete_menu(update, context):
 
     conn = await db_connect()
 
     try:
+
         rows = await conn.fetch(
             """
             SELECT id, title
@@ -1053,30 +1307,39 @@ async def admin_delete_menu(update, context):
             LIMIT 30
             """
         )
+
     finally:
         await conn.close()
 
     if not rows:
+
         await update.callback_query.message.reply_text(
             "Delete করার মতো Media নেই।"
         )
+
         return
 
     keyboard = []
 
     for row in rows:
+
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    f"🗑 {row['id']} - {row['title'][:25]}",
-                    callback_data=f"delete:{row['id']}",
+                    f"🗑 {row['id']} - "
+                    f"{row['title'][:25]}",
+                    callback_data=(
+                        f"delete:{row['id']}"
+                    ),
                 )
             ]
         )
 
     await update.callback_query.message.reply_text(
         "🗑 কোন Content Delete করবে?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
     )
 
 
@@ -1085,27 +1348,37 @@ async def delete_media(update, context):
     query = update.callback_query
 
     if not is_admin(query.from_user.id):
+
         await query.answer(
             "⛔ Admin only",
             show_alert=True,
         )
+
         return
 
     media_id = int(
-        query.data.replace("delete:", "", 1)
+        query.data.replace(
+            "delete:",
+            "",
+            1,
+        )
     )
 
     conn = await db_connect()
 
     try:
-        result = await conn.execute(
+
+        await conn.execute(
             "DELETE FROM media WHERE id = $1",
             media_id,
         )
+
     finally:
         await conn.close()
 
-    await query.answer("Deleted")
+    await query.answer(
+        "Deleted"
+    )
 
     await query.message.reply_text(
         f"🗑 Media ID {media_id} delete করা হয়েছে।"
@@ -1116,22 +1389,25 @@ async def delete_media(update, context):
 # SOCIAL LINKS
 # =========================================================
 
-
 async def save_social(platform, value):
 
     conn = await db_connect()
 
     try:
+
         await conn.execute(
             """
-            INSERT INTO social_links (platform, value)
+            INSERT INTO social_links
+            (platform, value)
             VALUES ($1,$2)
             ON CONFLICT (platform)
-            DO UPDATE SET value = EXCLUDED.value
+            DO UPDATE SET
+                value = EXCLUDED.value
             """,
             platform,
             value,
         )
+
     finally:
         await conn.close()
 
@@ -1141,7 +1417,8 @@ async def get_social(platform):
     conn = await db_connect()
 
     try:
-        value = await conn.fetchval(
+
+        return await conn.fetchval(
             """
             SELECT value
             FROM social_links
@@ -1150,50 +1427,76 @@ async def get_social(platform):
             platform,
         )
 
-        return value
-
     finally:
         await conn.close()
 
 
 # =========================================================
-# ADMIN TEXT
+# TEXT HANDLER
 # =========================================================
-
 
 async def text_handler(update, context):
 
-    if not update.message or not update.message.text:
+    if not update.message:
+        return
+
+    if not update.message.text:
         return
 
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    await save_contact(update.effective_user)
+    await save_contact(
+        update.effective_user
+    )
 
-    # Admin media file/text state
+    # =====================================================
+    # ADMIN STATE FIRST
+    # =====================================================
+
     if is_admin(user_id):
 
-        state = get_state(context, user_id)
+        state = get_state(
+            context,
+            user_id,
+        )
 
         if state:
 
             if state.get("action") == "add_category":
-                if await add_category_text(update, context):
+
+                if await add_category_text(
+                    update,
+                    context,
+                ):
                     return
 
             if state.get("action") == "add_media":
-                if await handle_state_text(update, context):
+
+                if await handle_state_text(
+                    update,
+                    context,
+                ):
                     return
 
-        # Natural language commands
+        # =================================================
+        # NATURAL VIDEO COMMAND
+        # =================================================
+
         if is_video_command(text):
+
+            clear_state(
+                context,
+                user_id,
+            )
+
             set_state(
                 context,
                 user_id,
                 {
                     "action": "add_media",
                     "media_type": "video",
+                    "step": "media",
                     "file_id": None,
                     "thumbnail_file_id": None,
                     "title": None,
@@ -1206,15 +1509,27 @@ async def text_handler(update, context):
                 "🎬 ভিডিও যোগ করা হচ্ছে।\n\n"
                 "প্রথমে ভিডিও পাঠাও।"
             )
+
             return
 
+        # =================================================
+        # NATURAL PHOTO COMMAND
+        # =================================================
+
         if is_photo_command(text):
+
+            clear_state(
+                context,
+                user_id,
+            )
+
             set_state(
                 context,
                 user_id,
                 {
                     "action": "add_media",
                     "media_type": "photo",
+                    "step": "media",
                     "file_id": None,
                     "thumbnail_file_id": None,
                     "title": None,
@@ -1227,15 +1542,27 @@ async def text_handler(update, context):
                 "📸 ছবি যোগ করা হচ্ছে।\n\n"
                 "প্রথমে ছবি পাঠাও।"
             )
+
             return
 
+        # =================================================
+        # NATURAL AUDIO COMMAND
+        # =================================================
+
         if is_audio_command(text):
+
+            clear_state(
+                context,
+                user_id,
+            )
+
             set_state(
                 context,
                 user_id,
                 {
                     "action": "add_media",
                     "media_type": "audio",
+                    "step": "media",
                     "file_id": None,
                     "thumbnail_file_id": None,
                     "title": None,
@@ -1248,22 +1575,32 @@ async def text_handler(update, context):
                 "🎵 অডিও যোগ করা হচ্ছে।\n\n"
                 "প্রথমে Audio পাঠাও।"
             )
+
             return
 
-    # Social admin commands
+    # =====================================================
+    # SOCIAL LINKS
+    # =====================================================
+
     t = normalize(text)
 
     if t in [
         "এডমিন ফেসবুক আইডি দাও",
         "admin facebook dao",
     ]:
-        value = await get_social("facebook")
+
+        value = await get_social(
+            "facebook"
+        )
 
         if value:
+
             await update.message.reply_text(
                 f"📘 Admin Facebook:\n{value}"
             )
+
         else:
+
             await update.message.reply_text(
                 "Facebook ID এখনো দেওয়া হয়নি।"
             )
@@ -1274,13 +1611,19 @@ async def text_handler(update, context):
         "এডমিন টিকটক আইডি দাও",
         "admin tiktok dao",
     ]:
-        value = await get_social("tiktok")
+
+        value = await get_social(
+            "tiktok"
+        )
 
         if value:
+
             await update.message.reply_text(
                 f"🎵 Admin TikTok:\n{value}"
             )
+
         else:
+
             await update.message.reply_text(
                 "TikTok ID এখনো দেওয়া হয়নি।"
             )
@@ -1292,7 +1635,6 @@ async def text_handler(update, context):
 # MEDIA MESSAGE HANDLER
 # =========================================================
 
-
 async def media_handler(update, context):
 
     if not update.message:
@@ -1303,7 +1645,10 @@ async def media_handler(update, context):
     if not is_admin(user_id):
         return
 
-    state = get_state(context, user_id)
+    state = get_state(
+        context,
+        user_id,
+    )
 
     if not state:
         return
@@ -1311,13 +1656,71 @@ async def media_handler(update, context):
     if state.get("action") != "add_media":
         return
 
-    # If waiting for thumbnail
-    if state.get("file_id") and not state.get("title"):
-        if await handle_thumbnail(update, context):
+    step = state.get("step")
+
+    # =====================================================
+    # MAIN MEDIA
+    # =====================================================
+
+    if step == "media":
+
+        if await handle_admin_media_file(
+            update,
+            context,
+        ):
             return
 
-    # Main content
-    if await handle_admin_media_file(update, context):
+    # =====================================================
+    # THUMBNAIL
+    # =====================================================
+
+    elif step == "thumbnail":
+
+        if await handle_thumbnail(
+            update,
+            context,
+        ):
+            return
+
+        await update.message.reply_text(
+            "⚠️ এখন Thumbnail দিতে হবে।\n\n"
+            "🖼️ একটি ছবি পাঠাও।"
+        )
+
+        return
+
+    # =====================================================
+    # TITLE / DESCRIPTION
+    # =====================================================
+
+    elif step == "title":
+
+        await update.message.reply_text(
+            "📝 এখন Title লিখো।"
+        )
+
+        return
+
+    elif step == "description":
+
+        await update.message.reply_text(
+            "📄 এখন Description লিখো "
+            "অথবা `skip` লিখো।"
+        )
+
+        return
+
+    # =====================================================
+    # CATEGORY
+    # =====================================================
+
+    elif step == "category":
+
+        await update.message.reply_text(
+            "📁 Category Button থেকে "
+            "একটি Category নির্বাচন করো।"
+        )
+
         return
 
 
@@ -1325,35 +1728,58 @@ async def media_handler(update, context):
 # CALLBACK ROUTER
 # =========================================================
 
-
 async def callback_router(update, context):
 
     query = update.callback_query
     data = query.data or ""
 
     if data.startswith("cat:"):
-        await category_callback(update, context)
+
+        await category_callback(
+            update,
+            context,
+        )
 
     elif data.startswith("choosecat:"):
-        await choose_category_callback(update, context)
+
+        await choose_category_callback(
+            update,
+            context,
+        )
 
     elif data.startswith("admin_"):
+
         if data == "admin_add_category":
-            await add_category_start(update, context)
+
+            await query.answer()
+
+            await add_category_start(
+                update,
+                context,
+            )
+
         else:
-            await admin_callback(update, context)
+
+            await admin_callback(
+                update,
+                context,
+            )
 
     elif data.startswith("delete:"):
-        await delete_media(update, context)
+
+        await delete_media(
+            update,
+            context,
+        )
 
     else:
+
         await query.answer()
 
 
 # =========================================================
 # TELEGRAM FILE URL
 # =========================================================
-
 
 def telegram_file_url(file_id):
 
@@ -1369,9 +1795,11 @@ def telegram_file_url(file_id):
         timeout=30,
     ) as response:
 
-        data = response.read().decode("utf-8")
+        data = response.read().decode(
+            "utf-8"
+        )
 
-    result = __import__("json").loads(data)
+    result = json.loads(data)
 
     if not result.get("ok"):
         raise RuntimeError(
@@ -1389,17 +1817,40 @@ def telegram_file_url(file_id):
 
 
 # =========================================================
-# FLASK WEB
+# DB HELPER FOR FLASK
 # =========================================================
 
+def run_db(coro):
+
+    loop = asyncio.new_event_loop()
+
+    try:
+
+        asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(
+            coro
+        )
+
+    finally:
+
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
+# =========================================================
+# FLASK HOME
+# =========================================================
 
 @app.route("/")
 def home():
+
     return "Bangla Vibe Bot is running."
 
 
 @app.route("/health")
 def health():
+
     return jsonify({
         "status": "ok"
     })
@@ -1407,19 +1858,25 @@ def health():
 
 @app.route("/app")
 def web_app():
+
     file_path = os.path.join(
         os.path.dirname(__file__),
         "index.html",
     )
 
     if not os.path.exists(file_path):
-        return "index.html not found", 404
+
+        return (
+            "index.html not found",
+            404,
+        )
 
     with open(
         file_path,
         "r",
         encoding="utf-8",
     ) as f:
+
         return f.read()
 
 
@@ -1427,109 +1884,130 @@ def web_app():
 # API MEDIA
 # =========================================================
 
+async def fetch_media(media_id):
 
-@app.route("/api/media/<int:media_id>")
-def api_media(media_id):
-
-    conn = get_db_sync()
+    conn = await db_connect()
 
     try:
-        row = conn.fetchrow(
+
+        return await conn.fetchrow(
             """
-            SELECT id,
-                   media_type,
-                   file_id,
-                   thumbnail_file_id,
-                   title,
-                   description,
-                   category
+            SELECT
+                id,
+                media_type,
+                file_id,
+                thumbnail_file_id,
+                title,
+                description,
+                category
             FROM media
             WHERE id = $1
             """,
             media_id,
         )
 
-        # asyncpg coroutine handling
-        loop = asyncio.new_event_loop()
+    finally:
 
-        try:
-            asyncio.set_event_loop(loop)
-            row = loop.run_until_complete(row)
-        finally:
-            loop.close()
-            asyncio.set_event_loop(None)
+        await conn.close()
+
+
+@app.route("/api/media/<int:media_id>")
+def api_media(media_id):
+
+    try:
+
+        row = run_db(
+            fetch_media(media_id)
+        )
 
         if not row:
+
             return jsonify({
                 "error": "Media not found"
             }), 404
 
         return jsonify({
+
             "id": row["id"],
+
             "media_type": row["media_type"],
+
             "title": row["title"],
-            "description": row["description"] or "",
-            "category": row["category"] or "",
+
+            "description": (
+                row["description"]
+                or ""
+            ),
+
+            "category": (
+                row["category"]
+                or ""
+            ),
+
             "thumbnail_url": (
                 f"/thumbnail/{row['id']}"
                 if row["thumbnail_file_id"]
                 else ""
             ),
+
             "media_url": (
-                f"/media/{row['media_type']}/{row['id']}"
+                f"/media/"
+                f"{row['media_type']}/"
+                f"{row['id']}"
             ),
+
         })
 
     except Exception as e:
-        logger.exception("API error")
+
+        logger.exception(
+            "API error"
+        )
 
         return jsonify({
             "error": str(e)
         }), 500
 
+
+# =========================================================
+# THUMBNAIL
+# =========================================================
+
+async def fetch_thumbnail(media_id):
+
+    conn = await db_connect()
+
+    try:
+
+        return await conn.fetchrow(
+            """
+            SELECT thumbnail_file_id
+            FROM media
+            WHERE id = $1
+            """,
+            media_id,
+        )
+
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
-
-# =========================================================
-# THUMBNAIL PROXY
-# =========================================================
+        await conn.close()
 
 
 @app.route("/thumbnail/<int:media_id>")
 def thumbnail_proxy(media_id):
 
-    async def get_row():
-        conn = await db_connect()
+    row = run_db(
+        fetch_thumbnail(media_id)
+    )
 
-        try:
-            return await conn.fetchrow(
-                """
-                SELECT thumbnail_file_id
-                FROM media
-                WHERE id = $1
-                """,
-                media_id,
-            )
-        finally:
-            await conn.close()
+    if not row:
+        return "Thumbnail not found", 404
 
-    loop = asyncio.new_event_loop()
-
-    try:
-        asyncio.set_event_loop(loop)
-        row = loop.run_until_complete(get_row())
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
-
-    if not row or not row["thumbnail_file_id"]:
+    if not row["thumbnail_file_id"]:
         return "Thumbnail not found", 404
 
     try:
+
         url = telegram_file_url(
             row["thumbnail_file_id"]
         )
@@ -1548,62 +2026,73 @@ def thumbnail_proxy(media_id):
 
         content = response.read()
 
-        content_type = (
-            response.headers.get(
-                "Content-Type",
-                "image/jpeg",
-            )
+        content_type = response.headers.get(
+            "Content-Type",
+            "image/jpeg",
         )
+
+        response.close()
 
         return Response(
             content,
             content_type=content_type,
         )
 
-    except Exception as e:
-        logger.exception("Thumbnail proxy error")
+    except Exception:
+
+        logger.exception(
+            "Thumbnail proxy error"
+        )
+
         return "Thumbnail error", 500
 
 
 # =========================================================
-# VIDEO / MEDIA PROXY
+# MEDIA PROXY
 # =========================================================
 
+async def fetch_media_file(media_id):
 
-@app.route("/media/<media_type>/<int:media_id>")
-def media_proxy(media_type, media_id):
-
-    async def get_row():
-        conn = await db_connect()
-
-        try:
-            return await conn.fetchrow(
-                """
-                SELECT file_id, media_type
-                FROM media
-                WHERE id = $1
-                """,
-                media_id,
-            )
-        finally:
-            await conn.close()
-
-    loop = asyncio.new_event_loop()
+    conn = await db_connect()
 
     try:
-        asyncio.set_event_loop(loop)
-        row = loop.run_until_complete(get_row())
+
+        return await conn.fetchrow(
+            """
+            SELECT file_id, media_type
+            FROM media
+            WHERE id = $1
+            """,
+            media_id,
+        )
+
     finally:
-        loop.close()
-        asyncio.set_event_loop(None)
+
+        await conn.close()
+
+
+@app.route(
+    "/media/<media_type>/<int:media_id>"
+)
+def media_proxy(
+    media_type,
+    media_id,
+):
+
+    row = run_db(
+        fetch_media_file(media_id)
+    )
 
     if not row:
+
         return "Media not found", 404
 
     if row["media_type"] != media_type:
+
         return "Invalid media type", 400
 
     try:
+
         telegram_url = telegram_file_url(
             row["file_id"]
         )
@@ -1612,10 +2101,12 @@ def media_proxy(media_type, media_id):
             "User-Agent": "Mozilla/5.0",
         }
 
-        # Very important for video seeking
-        range_header = request.headers.get("Range")
+        range_header = request.headers.get(
+            "Range"
+        )
 
         if range_header:
+
             headers["Range"] = range_header
 
         req = urllib.request.Request(
@@ -1644,27 +2135,38 @@ def media_proxy(media_type, media_id):
             "Last-Modified",
             "ETag",
         ]:
-            value = upstream.headers.get(header)
+
+            value = upstream.headers.get(
+                header
+            )
 
             if value:
-                response_headers[header] = value
+
+                response_headers[
+                    header
+                ] = value
 
         def generate():
 
-            while True:
-                chunk = upstream.read(
-                    1024 * 1024
-                )
-
-                if not chunk:
-                    break
-
-                yield chunk
-
             try:
-                upstream.close()
-            except Exception:
-                pass
+
+                while True:
+
+                    chunk = upstream.read(
+                        1024 * 1024
+                    )
+
+                    if not chunk:
+                        break
+
+                    yield chunk
+
+            finally:
+
+                try:
+                    upstream.close()
+                except Exception:
+                    pass
 
         return Response(
             generate(),
@@ -1674,18 +2176,21 @@ def media_proxy(media_type, media_id):
         )
 
     except Exception as e:
+
         logger.exception(
             "Media proxy error: %s",
             e,
         )
 
-        return "Media playback error", 500
+        return (
+            "Media playback error",
+            500,
+        )
 
 
 # =========================================================
-# ERROR
+# FLASK ERROR
 # =========================================================
-
 
 @app.errorhandler(Exception)
 def flask_error(error):
@@ -1704,7 +2209,6 @@ def flask_error(error):
 # FLASK THREAD
 # =========================================================
 
-
 def run_flask():
 
     app.run(
@@ -1720,11 +2224,13 @@ def run_flask():
 # POST INIT
 # =========================================================
 
-
 async def post_init(application):
 
     await init_db()
-    await setup_commands(application)
+
+    await setup_commands(
+        application
+    )
 
     logger.info(
         "🤖 Bangla Vibe Bot started..."
@@ -1734,7 +2240,6 @@ async def post_init(application):
 # =========================================================
 # MAIN
 # =========================================================
-
 
 def main():
 
@@ -1750,7 +2255,10 @@ def main():
         .build()
     )
 
-    # Commands
+    # =====================================================
+    # COMMANDS
+    # =====================================================
+
     application.add_handler(
         CommandHandler(
             "start",
@@ -1765,14 +2273,20 @@ def main():
         )
     )
 
-    # Callback
+    # =====================================================
+    # CALLBACK
+    # =====================================================
+
     application.add_handler(
         CallbackQueryHandler(
             callback_router,
         )
     )
 
-    # Photos/videos/audio/documents
+    # =====================================================
+    # MEDIA
+    # =====================================================
+
     application.add_handler(
         MessageHandler(
             filters.PHOTO
@@ -1783,7 +2297,10 @@ def main():
         )
     )
 
-    # Text
+    # =====================================================
+    # TEXT
+    # =====================================================
+
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
