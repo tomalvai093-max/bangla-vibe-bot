@@ -1,13 +1,12 @@
 <!DOCTYPE html>
 <html lang="bn">
 <head>
-
 <meta charset="UTF-8">
 
 <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
->
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+/>
 
 <title>Bangla Vibe</title>
 
@@ -16,402 +15,284 @@
 <style>
 
 * {
-    box-sizing: border-box;
+  box-sizing: border-box;
 }
 
 html,
 body {
-    margin: 0;
-    padding: 0;
-    min-height: 100%;
-    background: #050509;
-    color: white;
-    font-family:
-        Arial,
-        "Noto Sans Bengali",
-        sans-serif;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+  background: #05010b;
+  color: white;
+  font-family:
+    Arial,
+    "Noto Sans Bengali",
+    sans-serif;
 }
 
 body {
-    padding-bottom: 30px;
+  display: flex;
+  justify-content: center;
 }
 
 .container {
-    width: 100%;
-    max-width: 720px;
-    margin: auto;
-    padding: 18px;
-}
-
-.header {
-    text-align: center;
-    padding: 10px 0 18px;
+  width: 100%;
+  max-width: 650px;
+  padding: 18px;
 }
 
 .logo {
-    font-size: 27px;
-    font-weight: 900;
-
-    background:
-        linear-gradient(
-            90deg,
-            #ff2bd6,
-            #9d4edd,
-            #00eaff
-        );
-
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-.subtitle {
-    color: #aaa;
-    margin-top: 7px;
-    font-size: 14px;
+  text-align: center;
+  font-size: 30px;
+  font-weight: bold;
+  margin: 10px 0 20px;
+  color: #ffffff;
+  text-shadow:
+    0 0 8px #b000ff,
+    0 0 20px #ff00d4;
 }
 
 .card {
-    position: relative;
-
-    background:
-        linear-gradient(
-            145deg,
-            rgba(30, 15, 45, .96),
-            rgba(5, 10, 25, .98)
-        );
-
-    border: 1px solid rgba(255, 43, 214, .45);
-
-    border-radius: 22px;
-
-    overflow: hidden;
-
-    box-shadow:
-        0 0 25px rgba(255, 43, 214, .12),
-        0 0 40px rgba(0, 234, 255, .08);
+  width: 100%;
+  background: #0d0715;
+  border: 1px solid #7b00ff;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow:
+    0 0 12px rgba(145, 0, 255, .5),
+    0 0 30px rgba(255, 0, 212, .15);
 }
 
-.thumbnail-box {
-    width: 100%;
-    background: #08080d;
+.media-area {
+  width: 100%;
+  background: #000;
+  position: relative;
+  min-height: 230px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .thumbnail {
-    width: 100%;
-    display: block;
-    aspect-ratio: 16 / 9;
-    object-fit: cover;
+  width: 100%;
+  max-height: 390px;
+  object-fit: cover;
+  display: block;
 }
 
-.content {
-    padding: 18px;
+.player {
+  width: 100%;
+  max-height: 430px;
+  display: block;
+  background: #000;
+}
+
+.audio-box {
+  width: 100%;
+  padding: 35px 20px;
+  background: #08030e;
+}
+
+.audio-box audio {
+  width: 100%;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.info {
+  padding: 18px;
 }
 
 .title {
-    font-size: 23px;
-    font-weight: 800;
-    line-height: 1.35;
-    margin-bottom: 10px;
-
-    color: #fff;
-
-    text-shadow:
-        0 0 12px rgba(255, 43, 214, .35);
+  font-size: 22px;
+  font-weight: bold;
+  line-height: 1.35;
+  color: #fff;
+  margin-bottom: 10px;
 }
 
 .description {
-    color: #aaa;
-    font-size: 14px;
-    line-height: 1.6;
-    margin-bottom: 18px;
+  color: #bdb4c9;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
-.lock {
-    padding: 13px 15px;
-    border-radius: 14px;
-
-    background:
-        rgba(255,255,255,.045);
-
-    border:
-        1px solid rgba(255,255,255,.08);
-
-    color: #ddd;
-    font-size: 14px;
-
-    margin-bottom: 14px;
+.category {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: #1b0c2b;
+  border: 1px solid #8d00ff;
+  color: #e3b9ff;
+  font-size: 13px;
 }
 
-.button {
-    width: 100%;
-    border: 0;
-    border-radius: 15px;
-
-    padding: 15px;
-
-    font-size: 16px;
-    font-weight: 800;
-
-    color: white;
-
-    cursor: pointer;
-
-    background:
-        linear-gradient(
-            90deg,
-            #ff1493,
-            #9d4edd,
-            #00cfff
-        );
-
-    box-shadow:
-        0 0 20px rgba(255, 20, 147, .25);
-
-    transition: .2s;
+.action {
+  padding: 0 18px 20px;
 }
 
-.button:active {
-    transform: scale(.97);
+button {
+  width: 100%;
+  border: 0;
+  border-radius: 14px;
+  padding: 15px;
+  font-size: 17px;
+  font-weight: bold;
+  color: white;
+  background: linear-gradient(
+    90deg,
+    #7b00ff,
+    #ff00d4
+  );
+  box-shadow:
+    0 0 12px rgba(255, 0, 212, .35);
+  cursor: pointer;
 }
 
-.ad-box {
-    display: none;
-
-    margin-top: 16px;
-    padding: 17px;
-
-    border-radius: 16px;
-
-    background:
-        rgba(255,255,255,.04);
-
-    border:
-        1px solid rgba(0,234,255,.25);
-
-    text-align: center;
+button:disabled {
+  opacity: .65;
 }
 
-.ad-title {
-    font-weight: 800;
-    margin-bottom: 7px;
+.status {
+  text-align: center;
+  padding: 12px 18px;
+  color: #aaa;
+  font-size: 14px;
 }
 
-.ad-text {
-    color: #aaa;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-.video-box {
-    display: none;
-    margin-top: 18px;
-}
-
-video,
-audio {
-    width: 100%;
-    display: block;
-
-    border-radius: 15px;
-
-    background: #000;
-
-    box-shadow:
-        0 0 25px rgba(0,234,255,.12);
-}
-
-.photo-box {
-    display: none;
-    margin-top: 18px;
-}
-
-.photo-box img {
-    width: 100%;
-    display: block;
-
-    border-radius: 15px;
-}
-
-.loading {
-    text-align: center;
-    padding: 50px 15px;
-    color: #aaa;
+.ad-note {
+  text-align: center;
+  color: #8eeeff;
+  font-size: 13px;
+  margin-top: 10px;
 }
 
 .error {
-    text-align: center;
-    padding: 50px 15px;
-    color: #ff7adf;
-}
-
-.neon-line {
-    height: 2px;
-    margin: 15px 0 20px;
-
-    background:
-        linear-gradient(
-            90deg,
-            transparent,
-            #ff2bd6,
-            #00eaff,
-            transparent
-        );
-
-    box-shadow:
-        0 0 12px rgba(255,43,214,.6);
-}
-
-.small {
-    color: #777;
-    text-align: center;
-    font-size: 11px;
-    margin-top: 18px;
+  text-align: center;
+  padding: 40px 20px;
+  color: #ff8de8;
 }
 
 </style>
-
 </head>
 
 <body>
 
 <div class="container">
 
-    <div class="header">
+  <div class="logo">
+    🔥 Bangla Vibe
+  </div>
 
-        <div class="logo">
-            🔥 Bangla Vibe
-        </div>
+  <div id="loading" class="status">
+    Content লোড হচ্ছে...
+  </div>
 
-        <div class="subtitle">
-            Premium Content
-        </div>
+  <div id="error" class="error hidden">
+    Content পাওয়া যায়নি।
+  </div>
+
+  <div id="contentCard" class="card hidden">
+
+    <!-- ======================================
+         MEDIA AREA
+         প্রথমে এখানে Thumbnail থাকবে
+         Unlock করার পর একই জায়গায় Media আসবে
+         ====================================== -->
+
+    <div id="mediaArea" class="media-area">
+
+      <img
+        id="thumbnail"
+        class="thumbnail"
+        src=""
+        alt="Thumbnail"
+      >
+
+      <video
+        id="videoPlayer"
+        class="player hidden"
+        controls
+        playsinline
+        preload="metadata"
+      ></video>
+
+      <div
+        id="audioBox"
+        class="audio-box hidden"
+      >
+        <audio
+          id="audioPlayer"
+          controls
+          preload="metadata"
+        ></audio>
+      </div>
+
+      <img
+        id="photoPlayer"
+        class="player hidden"
+        src=""
+        alt="Photo"
+      >
+
+    </div>
+
+    <!-- ======================================
+         INFO
+         ====================================== -->
+
+    <div class="info">
+
+      <div
+        id="title"
+        class="title"
+      ></div>
+
+      <div
+        id="description"
+        class="description"
+      ></div>
+
+      <div
+        id="category"
+        class="category"
+      ></div>
 
     </div>
 
-    <div id="loading" class="loading">
-        Content loading...
-    </div>
+    <!-- ======================================
+         BUTTON
+         ====================================== -->
 
-    <div id="error" class="error" style="display:none;">
-        Content পাওয়া যায়নি।
-    </div>
+    <div
+      id="action"
+      class="action"
+    >
 
-    <div id="mainCard" class="card" style="display:none;">
+      <button
+        id="watchButton"
+        onclick="openAd()"
+      >
+        ▶️ Content দেখুন
+      </button>
 
-        <div class="thumbnail-box">
-
-            <img
-                id="thumbnail"
-                class="thumbnail"
-                src=""
-                alt="Thumbnail"
-            >
-
-        </div>
-
-        <div class="content">
-
-            <div
-                id="title"
-                class="title"
-            ></div>
-
-            <div
-                id="description"
-                class="description"
-            ></div>
-
-            <div class="neon-line"></div>
-
-            <div class="lock">
-                🔒 কনটেন্ট দেখতে নিচের Button চাপুন।
-                <br><br>
-                📢 প্রথমে বিজ্ঞাপনের পেজ খুলবে।
-            </div>
-
-            <button
-                id="adButton"
-                class="button"
-                onclick="openAd()"
-            >
-                📢 বিজ্ঞাপন খুলুন
-            </button>
-
-            <div
-                id="adBox"
-                class="ad-box"
-            >
-
-                <div class="ad-title">
-                    ✅ বিজ্ঞাপন পেজ খোলা হয়েছে
-                </div>
-
-                <div class="ad-text">
-                    বিজ্ঞাপনের পেজ থেকে ফিরে এসে
-                    নিচের Button চাপুন।
-                </div>
-
-                <br>
-
-                <button
-                    id="unlockButton"
-                    class="button"
-                    onclick="unlockContent()"
-                >
-                    🔓 ভিডিও দেখুন
-                </button>
-
-            </div>
-
-            <div
-                id="videoBox"
-                class="video-box"
-            >
-
-                <video
-                    id="video"
-                    controls
-                    playsinline
-                    preload="metadata"
-                >
-                </video>
-
-            </div>
-
-            <div
-                id="photoBox"
-                class="photo-box"
-            >
-
-                <img
-                    id="photo"
-                    src=""
-                    alt="Content"
-                >
-
-            </div>
-
-            <div
-                id="audioBox"
-                class="video-box"
-            >
-
-                <audio
-                    id="audio"
-                    controls
-                    preload="metadata"
-                >
-                </audio>
-
-            </div>
-
-            <div class="small">
-                Bangla Vibe
-            </div>
-
-        </div>
+      <div class="ad-note">
+        প্রথমে বিজ্ঞাপন খুলবে, তারপর Content Unlock হবে।
+      </div>
 
     </div>
+
+    <div
+      id="status"
+      class="status"
+    ></div>
+
+  </div>
 
 </div>
 
@@ -419,286 +300,310 @@ audio {
 <script>
 
 const tg =
-    window.Telegram &&
-    window.Telegram.WebApp
-        ? window.Telegram.WebApp
-        : null;
+  window.Telegram &&
+  window.Telegram.WebApp
+    ? window.Telegram.WebApp
+    : null;
 
 if (tg) {
-    tg.ready();
-    tg.expand();
+  tg.ready();
+  tg.expand();
 }
 
+
+/* =====================================================
+   ADS
+   ===================================================== */
+
+const AD_URL =
+  "https://www.profitableratecpmnetwork.com/cc0kqkj3?key=96d4caaba1f61e2b9329ad0d07861cf4";
+
+
+/* =====================================================
+   GET MEDIA ID
+   ===================================================== */
+
+const params =
+  new URLSearchParams(
+    window.location.search
+  );
+
+const mediaId =
+  params.get("media_id");
+
+
+/* =====================================================
+   ELEMENTS
+   ===================================================== */
+
+const loading =
+  document.getElementById("loading");
+
+const errorBox =
+  document.getElementById("error");
+
+const card =
+  document.getElementById("contentCard");
+
+const thumbnail =
+  document.getElementById("thumbnail");
+
+const videoPlayer =
+  document.getElementById("videoPlayer");
+
+const audioBox =
+  document.getElementById("audioBox");
+
+const audioPlayer =
+  document.getElementById("audioPlayer");
+
+const photoPlayer =
+  document.getElementById("photoPlayer");
+
+const title =
+  document.getElementById("title");
+
+const description =
+  document.getElementById("description");
+
+const category =
+  document.getElementById("category");
+
+const action =
+  document.getElementById("action");
+
+const watchButton =
+  document.getElementById("watchButton");
+
+const statusBox =
+  document.getElementById("status");
+
+
+/* =====================================================
+   LOAD MEDIA
+   ===================================================== */
 
 let mediaData = null;
-let adOpened = false;
-
-
-function getMediaId() {
-
-    const params =
-        new URLSearchParams(
-            window.location.search
-        );
-
-    return params.get("id");
-}
-
 
 async function loadMedia() {
 
-    const id = getMediaId();
+  if (!mediaId) {
 
-    if (!id) {
-        showError();
-        return;
+    loading.classList.add("hidden");
+    errorBox.classList.remove("hidden");
+
+    errorBox.textContent =
+      "❌ Media ID পাওয়া যায়নি।";
+
+    return;
+  }
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/media/" + mediaId
+      );
+
+    if (!response.ok) {
+      throw new Error(
+        "Media not found"
+      );
     }
 
-    try {
+    mediaData =
+      await response.json();
 
-        const response =
-            await fetch(
-                "/api/media/" + encodeURIComponent(id)
-            );
+    loading.classList.add("hidden");
 
-        if (!response.ok) {
-            throw new Error("Media not found");
-        }
+    card.classList.remove("hidden");
 
-        mediaData =
-            await response.json();
+    title.textContent =
+      mediaData.title || "";
 
-        document.getElementById(
-            "loading"
-        ).style.display = "none";
+    description.textContent =
+      mediaData.description || "";
 
-        document.getElementById(
-            "mainCard"
-        ).style.display = "block";
+    category.textContent =
+      mediaData.category || "";
 
+    /* -----------------------------------------
+       Thumbnail
+       ----------------------------------------- */
 
-        document.getElementById(
-            "title"
-        ).textContent =
-            mediaData.title || "Content";
+    if (mediaData.thumbnail) {
 
+      thumbnail.src =
+        mediaData.thumbnail;
 
-        const description =
-            mediaData.description || "";
+    } else {
 
-        if (description) {
-
-            document.getElementById(
-                "description"
-            ).textContent =
-                description;
-
-        } else {
-
-            document.getElementById(
-                "description"
-            ).style.display = "none";
-
-        }
-
-
-        const thumbnail =
-            document.getElementById(
-                "thumbnail"
-            );
-
-        if (mediaData.thumbnail_url) {
-
-            thumbnail.src =
-                mediaData.thumbnail_url;
-
-        } else {
-
-            thumbnail.style.display =
-                "none";
-        }
-
-    } catch (error) {
-
-        console.error(error);
-
-        showError();
+      thumbnail.classList.add(
+        "hidden"
+      );
     }
+
+  } catch (error) {
+
+    console.error(error);
+
+    loading.classList.add("hidden");
+
+    errorBox.classList.remove(
+      "hidden"
+    );
+
+    errorBox.textContent =
+      "❌ Content লোড করা যায়নি।";
+  }
 }
 
 
-function showError() {
-
-    document.getElementById(
-        "loading"
-    ).style.display = "none";
-
-    document.getElementById(
-        "error"
-    ).style.display = "block";
-}
-
-
-/*
-    SmartLink cannot reliably tell our page
-    that an ad was completed.
-
-    We therefore open the SmartLink only
-    after the user presses the button.
-*/
-
+/* =====================================================
+   OPEN AD
+   ===================================================== */
 
 function openAd() {
 
-    if (!mediaData) {
-        return;
-    }
+  if (!mediaData) {
+    return;
+  }
 
-    adOpened = true;
+  /*
+   SmartLink direct user action থেকে open করা হচ্ছে।
+   Browser popup restriction কমানোর জন্য
+   function সরাসরি button click থেকে চালানো হয়েছে।
+  */
 
-    const adBox =
-        document.getElementById(
-            "adBox"
-        );
+  let adWindow = null;
 
-    adBox.style.display =
-        "block";
+  try {
 
+    adWindow =
+      window.open(
+        AD_URL,
+        "_blank"
+      );
 
-    /*
-        Open SmartLink from a direct
-        user click.
-    */
+  } catch (e) {
 
-    try {
+    console.log(e);
 
-        window.open(
-            "https://www.profitableratecpmnetwork.com/cc0kqkj3?key=96d4caaba1f61e2b9329ad0d07861cf4",
-            "_blank"
-        );
+  }
 
-    } catch (error) {
+  /*
+   Ad খুলে গেলে user Web App-এ ফিরে এসে
+   Unlock Content চাপবে।
+  */
 
-        window.location.href =
-            "https://www.profitableratecpmnetwork.com/cc0kqkj3?key=96d4caaba1f61e2b9329ad0d07861cf4";
-    }
+  watchButton.textContent =
+    "🔓 ফিরে এসে Content Unlock করুন";
 
+  watchButton.onclick =
+    unlockContent;
 
-    document.getElementById(
-        "adButton"
-    ).style.display =
-        "none";
+  statusBox.textContent =
+    "বিজ্ঞাপনটি দেখে/ভিজিট করে এই Web App-এ ফিরে আসুন।";
+
 }
 
+
+/* =====================================================
+   UNLOCK
+   ===================================================== */
 
 function unlockContent() {
 
-    if (!adOpened || !mediaData) {
-        return;
-    }
+  if (!mediaData) {
+    return;
+  }
 
-    const videoBox =
-        document.getElementById(
-            "videoBox"
-        );
+  /*
+   Thumbnail সরানো হচ্ছে।
+   একই media-area-এর মধ্যে player দেখানো হবে।
+  */
 
-    const photoBox =
-        document.getElementById(
-            "photoBox"
-        );
-
-    const audioBox =
-        document.getElementById(
-            "audioBox"
-        );
+  thumbnail.classList.add(
+    "hidden"
+  );
 
 
-    if (mediaData.media_type === "video") {
+  /* ==============================================
+     VIDEO
+     ============================================== */
 
-        const video =
-            document.getElementById(
-                "video"
-            );
+  if (mediaData.type === "video") {
 
-        video.src =
-            mediaData.media_url;
+    videoPlayer.src =
+      "/media/video/" +
+      mediaData.id;
 
-        videoBox.style.display =
-            "block";
+    videoPlayer.classList.remove(
+      "hidden"
+    );
 
-        video.load();
+    videoPlayer.load();
 
-        setTimeout(
-            () => {
-                video.scrollIntoView({
-                    behavior: "smooth",
-                    block: "center"
-                });
-            },
-            200
-        );
-
-    }
+  }
 
 
-    else if (
-        mediaData.media_type === "photo"
-    ) {
+  /* ==============================================
+     AUDIO
+     ============================================== */
 
-        const photo =
-            document.getElementById(
-                "photo"
-            );
+  else if (mediaData.type === "audio") {
 
-        photo.src =
-            mediaData.media_url;
+    audioBox.classList.remove(
+      "hidden"
+    );
 
-        photoBox.style.display =
-            "block";
+    audioPlayer.src =
+      "/media/audio/" +
+      mediaData.id;
 
-        setTimeout(
-            () => {
-                photo.scrollIntoView({
-                    behavior: "smooth",
-                    block: "center"
-                });
-            },
-            200
-        );
+    audioPlayer.load();
 
-    }
+  }
 
 
-    else if (
-        mediaData.media_type === "audio"
-    ) {
+  /* ==============================================
+     PHOTO
+     ============================================== */
 
-        const audio =
-            document.getElementById(
-                "audio"
-            );
+  else if (mediaData.type === "photo") {
 
-        audio.src =
-            mediaData.media_url;
+    photoPlayer.src =
+      "/media/photo/" +
+      mediaData.id;
 
-        audioBox.style.display =
-            "block";
+    photoPlayer.classList.remove(
+      "hidden"
+    );
 
-        audio.load();
-
-    }
+  }
 
 
-    document.getElementById(
-        "adBox"
-    ).style.display =
-        "none";
+  /* ==============================================
+     BUTTON REMOVE
+     ============================================== */
+
+  action.classList.add(
+    "hidden"
+  );
+
+  statusBox.textContent =
+    "✅ Content Unlocked";
+
 }
 
+
+/* =====================================================
+   START
+   ===================================================== */
 
 loadMedia();
 
 </script>
 
 </body>
-    </html>
+</html>
