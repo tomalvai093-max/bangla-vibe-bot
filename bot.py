@@ -117,10 +117,7 @@ async def init_db():
             )
         """)
 
-        # IMPORTANT:
-        # পুরোনো videos table থাকলেও missing column যোগ হবে।
-        # কোনো পুরোনো video delete হবে না।
-
+        # পুরোনো database হলে missing column যোগ হবে
         await conn.execute("""
             ALTER TABLE videos
             ADD COLUMN IF NOT EXISTS file_id TEXT
@@ -173,7 +170,6 @@ async def init_db():
             )
         """)
 
-        # পুরোনো contacts table থাকলে missing column যোগ হবে
         await conn.execute("""
             ALTER TABLE contacts
             ADD COLUMN IF NOT EXISTS user_id BIGINT
@@ -269,10 +265,6 @@ async def save_contact(user):
     try:
         async with db_pool.acquire() as conn:
 
-            # ON CONFLICT ব্যবহার করছি না,
-            # কারণ পুরোনো contacts table-এ UNIQUE constraint
-            # নাও থাকতে পারে।
-
             existing = await conn.fetchval(
                 """
                 SELECT id
@@ -325,30 +317,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT name
+            SELECT id, name
             FROM categories
             ORDER BY id
             """
         )
 
     buttons = []
-
-    # Dynamic categories
-    temp = []
+    category_buttons = []
 
     for row in rows:
-        temp.append(
+        category_buttons.append(
             InlineKeyboardButton(
                 row["name"],
                 callback_data=f"category:{row['name']}",
             )
         )
 
-    # প্রতি row-তে 2টি button
-    for i in range(0, len(temp), 2):
-        buttons.append(temp[i:i + 2])
+    for i in range(0, len(category_buttons), 2):
+        buttons.append(category_buttons[i:i + 2])
 
-    # Social
     buttons.append([
         InlineKeyboardButton(
             "📘 Admin Facebook",
@@ -436,6 +424,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "👥 Users",
                 callback_data="admin:users",
             ),
+        ],
     ]
 
     await update.message.reply_text(
@@ -466,7 +455,7 @@ def clear_state(context):
 
 
 # =========================================================
-# ADMIN CALLBACKS
+# ADMIN CALLBACK
 # =========================================================
 
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -482,7 +471,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     action = query.data
 
+    # -----------------------------------------------------
     # ADD VIDEO
+    # -----------------------------------------------------
+
     if action == "admin:add_video":
 
         clear_state(context)
@@ -494,7 +486,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # DELETE VIDEO
+    # -----------------------------------------------------
+
     if action == "admin:delete_video":
 
         async with db_pool.acquire() as conn:
@@ -515,6 +510,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = []
 
         for row in rows:
+
             title = row["title"] or f"Video #{row['id']}"
 
             buttons.append([
@@ -530,7 +526,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # ADD CATEGORY
+    # -----------------------------------------------------
+
     if action == "admin:add_category":
 
         set_state(context, "add_category")
@@ -541,7 +540,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # DELETE CATEGORY
+    # -----------------------------------------------------
+
     if action == "admin:delete_category":
 
         async with db_pool.acquire() as conn:
@@ -576,7 +578,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # FACEBOOK
+    # -----------------------------------------------------
+
     if action == "admin:add_facebook":
 
         set_state(context, "add_facebook")
@@ -586,7 +591,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # TIKTOK
+    # -----------------------------------------------------
+
     if action == "admin:add_tiktok":
 
         set_state(context, "add_tiktok")
@@ -596,19 +604,34 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # DELETE FACEBOOK
+    # -----------------------------------------------------
+
     if action == "admin:delete_facebook":
 
-        await delete_social("facebook", query.message)
+        await delete_social(
+            "facebook",
+            query.message,
+        )
         return
 
+    # -----------------------------------------------------
     # DELETE TIKTOK
+    # -----------------------------------------------------
+
     if action == "admin:delete_tiktok":
 
-        await delete_social("tiktok", query.message)
+        await delete_social(
+            "tiktok",
+            query.message,
+        )
         return
 
+    # -----------------------------------------------------
     # CATEGORIES
+    # -----------------------------------------------------
+
     if action == "admin:categories":
 
         async with db_pool.acquire() as conn:
@@ -637,7 +660,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # VIDEOS
+    # -----------------------------------------------------
+
     if action == "admin:videos":
 
         async with db_pool.acquire() as conn:
@@ -658,6 +684,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "📹 *Videos*\n\n"
 
         for row in rows:
+
             text += (
                 f"🆔 {row['id']}\n"
                 f"🎬 {row['title'] or 'Unnamed'}\n"
@@ -670,7 +697,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # -----------------------------------------------------
     # USERS
+    # -----------------------------------------------------
+
     if action == "admin:users":
 
         async with db_pool.acquire() as conn:
@@ -716,7 +746,7 @@ async def delete_social(platform, message):
             platform,
         )
 
-    if result.endswith("0"):
+    if result == "DELETE 0":
 
         await message.reply_text(
             f"ℹ️ কোনো {platform.title()} ID/Link যোগ করা হয়নি।"
@@ -789,7 +819,13 @@ async def delete_video_callback(update, context):
     if not is_admin(query.from_user.id):
         return
 
-    video_id = int(query.data.split(":")[1])
+    try:
+        video_id = int(query.data.split(":")[1])
+    except (ValueError, IndexError):
+        await query.message.reply_text(
+            "❌ ভুল Video ID।"
+        )
+        return
 
     async with db_pool.acquire() as conn:
 
@@ -818,7 +854,8 @@ async def delete_video_callback(update, context):
         )
 
     await query.message.reply_text(
-        f"✅ ভিডিও ডিলিট হয়েছে:\n{row['title']}"
+        f"✅ ভিডিও ডিলিট হয়েছে:\n"
+        f"{row['title'] or 'Unnamed'}"
     )
 
 
@@ -834,7 +871,13 @@ async def delete_category_callback(update, context):
     if not is_admin(query.from_user.id):
         return
 
-    category_id = int(query.data.split(":")[1])
+    try:
+        category_id = int(query.data.split(":")[1])
+    except (ValueError, IndexError):
+        await query.message.reply_text(
+            "❌ ভুল Category ID।"
+        )
+        return
 
     async with db_pool.acquire() as conn:
 
@@ -856,7 +899,7 @@ async def delete_category_callback(update, context):
 
         category_name = row["name"]
 
-        # আগে দেখে নিচ্ছি এই category-তে video আছে কি না
+        # ভিডিও থাকলে Category delete হবে না
         video_count = await conn.fetchval(
             """
             SELECT COUNT(*)
@@ -870,8 +913,7 @@ async def delete_category_callback(update, context):
 
             await query.message.reply_text(
                 f"⚠️ এই Category-তে {video_count}টি ভিডিও আছে।\n\n"
-                "ভিডিওগুলো যাতে হারিয়ে না যায়, তাই Category delete করা হয়নি।\n\n"
-                "আগে ভিডিওগুলো অন্য Category-তে রাখতে হবে।"
+                "ভিডিওগুলো যাতে হারিয়ে না যায়, তাই Category delete করা হয়নি।"
             )
             return
 
@@ -955,7 +997,13 @@ async def send_video(update, context):
     query = update.callback_query
     await query.answer()
 
-    video_id = int(query.data.split(":")[1])
+    try:
+        video_id = int(query.data.split(":")[1])
+    except (ValueError, IndexError):
+        await query.message.reply_text(
+            "❌ ভুল Video ID।"
+        )
+        return
 
     async with db_pool.acquire() as conn:
 
@@ -1018,10 +1066,8 @@ def is_add_video_text(text):
     phrases = [
         "ভিডিও দাও",
         "ভিডিও দে",
-        "ভিডিও দিন",
         "video dao",
         "video de",
-        "video din",
         "add video",
         "add a video",
         "upload video",
@@ -1144,15 +1190,10 @@ async def text_handler(update, context):
 
         state = get_state(context)
 
-        # VIDEO FILE
-        if state == "video_file":
-
-            await update.message.reply_text(
-                "❌ এখানে একটি Telegram Video পাঠাও।"
-            )
-            return
-
+        # -------------------------------------------------
         # VIDEO TITLE
+        # -------------------------------------------------
+
         if state == "video_title":
 
             context.user_data["video_title"] = text
@@ -1165,7 +1206,10 @@ async def text_handler(update, context):
             )
             return
 
+        # -------------------------------------------------
         # VIDEO DESCRIPTION
+        # -------------------------------------------------
+
         if state == "video_description":
 
             description = ""
@@ -1199,7 +1243,10 @@ async def text_handler(update, context):
             )
             return
 
+        # -------------------------------------------------
         # VIDEO CATEGORY
+        # -------------------------------------------------
+
         if state == "video_category":
 
             file_id = context.user_data.get(
@@ -1230,7 +1277,7 @@ async def text_handler(update, context):
 
                 async with db_pool.acquire() as conn:
 
-                    # Category থাকবে
+                    # নতুন Category হলে automatically যোগ হবে
                     await conn.execute(
                         """
                         INSERT INTO categories (name)
@@ -1240,10 +1287,7 @@ async def text_handler(update, context):
                         category,
                     )
 
-                    # IMPORTANT:
-                    # এখানে কোনো existing video delete/update হয় না।
-                    # নতুন video শুধু INSERT হয়।
-
+                    # পুরোনো video এখানে পরিবর্তন বা delete হয় না
                     await conn.execute(
                         """
                         INSERT INTO videos
@@ -1262,14 +1306,12 @@ async def text_handler(update, context):
                     "✅ ভিডিও সফলভাবে Save হয়েছে!\n\n"
                     f"🎬 নাম: {title}\n"
                     f"📂 Category: {category}\n\n"
-                    "💾 Database-এ স্থায়ীভাবে সংরক্ষিত হয়েছে।"
+                    "💾 PostgreSQL Database-এ সংরক্ষিত হয়েছে।"
                 )
 
             except Exception:
 
-                logger.exception(
-                    "VIDEO SAVE ERROR"
-                )
+                logger.exception("VIDEO SAVE ERROR")
 
                 clear_state(context)
 
@@ -1280,7 +1322,10 @@ async def text_handler(update, context):
 
             return
 
+        # -------------------------------------------------
         # ADD CATEGORY
+        # -------------------------------------------------
+
         if state == "add_category":
 
             try:
@@ -1304,9 +1349,7 @@ async def text_handler(update, context):
 
             except Exception:
 
-                logger.exception(
-                    "ADD CATEGORY ERROR"
-                )
+                logger.exception("ADD CATEGORY ERROR")
 
                 clear_state(context)
 
@@ -1316,7 +1359,10 @@ async def text_handler(update, context):
 
             return
 
+        # -------------------------------------------------
         # FACEBOOK
+        # -------------------------------------------------
+
         if state == "add_facebook":
 
             try:
@@ -1335,9 +1381,7 @@ async def text_handler(update, context):
 
             except Exception:
 
-                logger.exception(
-                    "FACEBOOK SAVE ERROR"
-                )
+                logger.exception("FACEBOOK SAVE ERROR")
 
                 clear_state(context)
 
@@ -1347,7 +1391,10 @@ async def text_handler(update, context):
 
             return
 
+        # -------------------------------------------------
         # TIKTOK
+        # -------------------------------------------------
+
         if state == "add_tiktok":
 
             try:
@@ -1366,9 +1413,7 @@ async def text_handler(update, context):
 
             except Exception:
 
-                logger.exception(
-                    "TIKTOK SAVE ERROR"
-                )
+                logger.exception("TIKTOK SAVE ERROR")
 
                 clear_state(context)
 
@@ -1378,7 +1423,9 @@ async def text_handler(update, context):
 
             return
 
+        # -------------------------------------------------
         # NATURAL ADMIN COMMANDS
+        # -------------------------------------------------
 
         if is_add_video_text(text):
 
@@ -1478,7 +1525,9 @@ async def text_handler(update, context):
 
         return
 
+    # =====================================================
     # NORMAL USER
+    # =====================================================
 
     await update.message.reply_text(
         "😊 আমি বুঝতে পারিনি।\n\n"
@@ -1535,7 +1584,6 @@ async def video_message(update, context):
 async def callback_router(update, context):
 
     query = update.callback_query
-
     data = query.data
 
     if data.startswith("category:"):
@@ -1642,7 +1690,7 @@ def main():
         .build()
     )
 
-    # Commands
+    # /start
     application.add_handler(
         CommandHandler(
             "start",
@@ -1650,6 +1698,7 @@ def main():
         )
     )
 
+    # /admin
     application.add_handler(
         CommandHandler(
             "admin",
@@ -1665,7 +1714,7 @@ def main():
         )
     )
 
-    # Callback
+    # Buttons
     application.add_handler(
         CallbackQueryHandler(
             callback_router
@@ -1680,7 +1729,7 @@ def main():
         )
     )
 
-    # Error
+    # Errors
     application.add_error_handler(
         error_handler
     )
