@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="bn">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width,initial-scale=1"
+    >
+
+    <title>Bangla Vibe</title>
+
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #f4f6f8;
+            color: #222;
+            font-family:
+                Arial,
+                "Noto Sans Bengali",
+                sans-serif;
+            text-align: center;
+        }
+
+        .box {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 18px;
+            padding: 20px;
+            box-shadow:
+                0 5px 25px
+                rgba(0,0,0,.08);
+        }
+
+        h2 {
+            margin-top: 5px;
+        }
+
+        #title {
+            font-size: 22px;
+            font-weight: bold;
+            margin: 15px 0 8px;
+        }
+
+        #description {
+            color: #666;
+            margin-bottom: 15px;
+            white-space: pre-wrap;
+        }
+
+        .btn {
+            width: 100%;
+            border: 0;
+            border-radius: 12px;
+            padding: 14px;
+            margin-top: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .ad-btn {
+            background: #1976d2;
+            color: white;
+        }
+
+        .open-btn {
+            background: #2e7d32;
+            color: white;
+            display: none;
+        }
+
+        .media {
+            width: 100%;
+            max-height: 70vh;
+            margin-top: 20px;
+            border-radius: 12px;
+            display: none;
+        }
+
+        audio.media {
+            height: 55px;
+        }
+
+        .notice {
+            padding: 12px;
+            background: #fff8e1;
+            border-radius: 10px;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+
+        .error {
+            color: #c62828;
+            margin-top: 15px;
+        }
+
+        .loading {
+            margin: 25px 0;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+<div class="box">
+
+    <h2>🔥 Bangla Vibe</h2>
+
+    <div
+        id="loading"
+        class="loading"
+    >
+        ⏳ Loading...
+    </div>
+
+    <div id="content" style="display:none;">
+
+        <div id="title"></div>
+
+        <div id="description"></div>
+
+        <div class="notice">
+            📢 কনটেন্ট দেখার আগে বিজ্ঞাপনের পেজ খুলবে।
+        </div>
+
+        <button
+            id="adButton"
+            class="btn ad-btn"
+            onclick="openAd()"
+        >
+            📢 বিজ্ঞাপন খুলুন
+        </button>
+
+        <button
+            id="openButton"
+            class="btn open-btn"
+            onclick="unlockMedia()"
+        >
+            🔓 কনটেন্ট খুলুন
+        </button>
+
+        <div
+            id="error"
+            class="error"
+        ></div>
+
+        <img
+            id="image"
+            class="media"
+            alt="Bangla Vibe"
+        >
+
+        <video
+            id="video"
+            class="media"
+            controls
+            playsinline
+        ></video>
+
+        <audio
+            id="audio"
+            class="media"
+            controls
+        ></audio>
+
+    </div>
+
+</div>
+
+
+<script>
+
+    const tg =
+        window.Telegram &&
+        window.Telegram.WebApp
+            ? window.Telegram.WebApp
+            : null;
+
+    if (tg) {
+        tg.ready();
+        tg.expand();
+    }
+
+
+    const params =
+        new URLSearchParams(
+            window.location.search
+        );
+
+    const mediaId =
+        params.get("media_id");
+
+
+    let mediaData = null;
+
+
+    async function loadMedia() {
+
+        if (!mediaId) {
+
+            showError(
+                "❌ Media ID পাওয়া যায়নি।"
+            );
+
+            return;
+        }
+
+        try {
+
+            const response =
+                await fetch(
+                    `/api/media/${encodeURIComponent(mediaId)}`
+                );
+
+            const data =
+                await response.json();
+
+            if (!data.ok) {
+
+                showError(
+                    "❌ Media পাওয়া যায়নি।"
+                );
+
+                return;
+            }
+
+            mediaData = data;
+
+            document.getElementById(
+                "loading"
+            ).style.display = "none";
+
+            document.getElementById(
+                "content"
+            ).style.display = "block";
+
+            document.getElementById(
+                "title"
+            ).textContent =
+                data.title;
+
+            document.getElementById(
+                "description"
+            ).textContent =
+                data.description || "";
+
+        } catch (error) {
+
+            console.error(error);
+
+            showError(
+                "❌ Server থেকে Media তথ্য আনা যায়নি।"
+            );
+        }
+    }
+
+
+    function openAd() {
+
+        if (!mediaData) {
+            return;
+        }
+
+        /*
+         * SmartLink user-এর browser-এ খুলবে।
+         * কোনো automatic/fake click করা হচ্ছে না।
+         */
+
+        window.open(
+            mediaData.ad_url,
+            "_blank"
+        );
+
+        document.getElementById(
+            "adButton"
+        ).style.display = "none";
+
+        document.getElementById(
+            "openButton"
+        ).style.display = "block";
+    }
+
+
+    function unlockMedia() {
+
+        if (!mediaData) {
+            return;
+        }
+
+        const type =
+            mediaData.type;
+
+        const url =
+            mediaData.media_url;
+
+
+        if (type === "photo") {
+
+            const image =
+                document.getElementById(
+                    "image"
+                );
+
+            image.src = url;
+            image.style.display = "block";
+
+        }
+
+        else if (type === "video") {
+
+            const video =
+                document.getElementById(
+                    "video"
+                );
+
+            video.src = url;
+            video.style.display = "block";
+
+            video.load();
+
+        }
+
+        else if (type === "audio") {
+
+            const audio =
+                document.getElementById(
+                    "audio"
+                );
+
+            audio.src = url;
+            audio.style.display = "block";
+
+            audio.load();
+
+        }
+
+        document.getElementById(
+            "openButton"
+        ).style.display = "none";
+    }
+
+
+    function showError(message) {
+
+        document.getElementById(
+            "loading"
+        ).style.display = "none";
+
+        document.getElementById(
+            "error"
+        ).textContent =
+            message;
+    }
+
+
+    loadMedia();
+
+</script>
+
+</body>
+
+  </html>
