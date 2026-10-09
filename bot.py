@@ -1,236 +1,334 @@
 import os
+import uuid
+import threading
 import logging
-from threading import Thread
+from pathlib import Path
+from functools import wraps
 
-from flask import Flask
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    WebAppInfo,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
-)
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from flask import Flask, request, jsonify, session, send_from_directory
+from werkzeug.utils import secure_filename
+from telegram import ReplyKeyboardMarkup, BotCommand
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-# Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
-# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip().lstrip("@")
-WEB_APP_URL = os.getenv("WEB_APP_URL", "").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
 
-# Web server for Render
-web_app = Flask(__name__)
+# Render Persistent Disk থাকলে UPLOAD_DIR=/var/data/uploads সেট করবে।
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+if not all([BOT_TOKEN, DATABASE_URL, ADMIN_USERNAME,
+            ADMIN_PASSWORD, SECRET_KEY]):
+    raise RuntimeError("Render Environment Variables অসম্পূর্ণ")
+
+app = Flask(__name__, static_folder="public")
+app.secret_key = SECRET_KEY
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = True
+
+VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
-@web_app.route("/")
+def connect_db():
+    return psycopg2.connect(
+        DATABASE_URL, connect_timeout=10, sslmode="require"
+    )
+
+
+def setup_db():
+    conn = connect_db()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS live_store_videos (
+                        id SERIAL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        video_file TEXT NOT NULL,
+                        thumbnail_file TEXT NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    ALTER TABLE live_store_videos
+                    ADD COLUMN IF NOT EXISTS video_file TEXT NOT NULL DEFAULT ''
+                """)
+                cur.execute("""
+                    ALTER TABLE live_store_videos
+                    ADD COLUMN IF NOT EXISTS thumbnail_file TEXT NOT NULL DEFAULT ''
+                """)
+    finally:
+        conn.close()
+
+
+def admin_only(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not session.get("admin"):
+            return jsonify({"error": "প্রথমে Admin Login করুন"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def save_upload(file, allowed):
+    if not file or not file.filename:
+        raise ValueError("ফাইল নির্বাচন করা হয়নি")
+
+    original = secure_filename(file.filename)
+    ext = Path(original).suffix.lower()
+
+    if ext not in allowed:
+        raise ValueError("এই ফাইলের ফরম্যাট অনুমোদিত নয়")
+
+    filename = uuid.uuid4().hex + ext
+    file.save(UPLOAD_DIR / filename)
+    return filename
+
+
+@app.get("/")
 def home():
-    return "Live Store Bot is running!", 200
+    return send_from_directory("public", "index.html")
 
 
-@web_app.route("/health")
+@app.get("/admin")
+def admin_page():
+    return send_from_directory("public", "admin.html")
+
+
+@app.get("/health")
 def health():
-    return {"status": "ok"}, 200
+    return "Live Store is running", 200
 
 
-def run_web_server():
-    port = int(os.getenv("PORT", "10000"))
-    web_app.run(
-        host="0.0.0.0",
-        port=port,
-        use_reloader=False,
-    )
+@app.get("/uploads/<path:filename>")
+def uploaded_file(filename):
+    # Only serve files directly inside the upload directory.
+    return send_from_directory(UPLOAD_DIR, filename)
 
 
-# Main menu
-def main_menu():
-    keyboard = [
-        [
-            InlineKeyboardButton("🎵 গান", callback_data="songs"),
-            InlineKeyboardButton("💃 নাচ", callback_data="dance"),
-        ],
-        [
-            InlineKeyboardButton("🎬 নাটক", callback_data="drama"),
-            InlineKeyboardButton("✍️ ক্যাপশন", callback_data="captions"),
-        ],
-        [
-            InlineKeyboardButton("❓ সাহায্য", callback_data="help"),
-            InlineKeyboardButton("👤 Admin Contact", callback_data="admin"),
-        ],
-    ]
+@app.get("/api/videos")
+def list_videos():
+    conn = connect_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, title, video_file, thumbnail_file, created_at
+                FROM live_store_videos ORDER BY id DESC
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
 
-    if WEB_APP_URL.startswith("https://"):
-        keyboard.append([
-            InlineKeyboardButton(
-                "🛍️ Open Live Store",
-                web_app=WebAppInfo(url=WEB_APP_URL),
+        for row in rows:
+            row["video_url"] = "/uploads/" + row["video_file"]
+            row["thumbnail_url"] = (
+                "/uploads/" + row["thumbnail_file"]
+                if row["thumbnail_file"] else ""
             )
-        ])
+            row["created_at"] = str(row["created_at"])
+        return jsonify(rows)
+    finally:
+        conn.close()
 
-    return InlineKeyboardMarkup(keyboard)
+
+@app.post("/api/admin/login")
+def login():
+    data = request.get_json(silent=True) or {}
+    if (data.get("username") == ADMIN_USERNAME
+            and data.get("password") == ADMIN_PASSWORD):
+        session.clear()
+        session["admin"] = True
+        return jsonify({"ok": True})
+    return jsonify({"error": "Username অথবা Password ভুল"}), 401
 
 
-# Start command
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    message = update.effective_message
+@app.get("/api/admin/session")
+def check_login():
+    return jsonify({"logged_in": bool(session.get("admin"))})
 
-    if message:
-        await message.reply_text(
-            "✨ Welcome to Live Store!\n\n"
-            "স্বাগতম! নিচের মেনু থেকে তোমার পছন্দের "
-            "ক্যাটাগরি বেছে নাও।",
-            reply_markup=main_menu(),
+
+@app.post("/api/admin/logout")
+@admin_only
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/videos")
+@admin_only
+def add_video():
+    title = (request.form.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "ভিডিওর নাম লিখুন"}), 400
+
+    video_name = None
+    thumb_name = None
+
+    try:
+        video_name = save_upload(request.files.get("video"), VIDEO_EXTS)
+        thumb_name = save_upload(
+            request.files.get("thumbnail"), IMAGE_EXTS
         )
 
+        conn = connect_db()
+        try:
+            with conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        INSERT INTO live_store_videos
+                            (title, video_file, thumbnail_file)
+                        VALUES (%s, %s, %s)
+                        RETURNING id
+                    """, (title[:200], video_name, thumb_name))
+                    new_id = cur.fetchone()["id"]
+        finally:
+            conn.close()
 
-# Help command
-async def help_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    message = update.effective_message
+        return jsonify({"ok": True, "id": new_id}), 201
 
-    if message:
-        await message.reply_text(
-            "❓ কী সাহায্য প্রয়োজন, লিখে পাঠাও।\n"
-            "অথবা নিচের মেনু থেকে একটি অপশন বেছে নাও।",
-            reply_markup=main_menu(),
-        )
+    except ValueError as exc:
+        for name in [video_name, thumb_name]:
+            if name:
+                (UPLOAD_DIR / name).unlink(missing_ok=True)
+        return jsonify({"error": str(exc)}), 400
+
+    except Exception:
+        log.exception("Video upload failed")
+        for name in [video_name, thumb_name]:
+            if name:
+                (UPLOAD_DIR / name).unlink(missing_ok=True)
+        return jsonify({
+            "error": "আপলোড হয়নি। Render Logs ও DATABASE_URL পরীক্ষা করুন।"
+        }), 500
 
 
-# Button responses
-async def menu_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    query = update.callback_query
+@app.put("/api/videos/<int:video_id>")
+@admin_only
+def rename_video(video_id):
+    data = request.get_json(silent=True) or {}
+    title = str(data.get("title", "")).strip()
 
-    if not query:
-        return
+    if not title:
+        return jsonify({"error": "নতুন নাম লিখুন"}), 400
 
-    await query.answer()
+    conn = connect_db()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE live_store_videos SET title=%s WHERE id=%s",
+                    (title[:200], video_id)
+                )
+                if cur.rowcount == 0:
+                    return jsonify({"error": "ভিডিও পাওয়া যায়নি"}), 404
+        return jsonify({"ok": True})
+    finally:
+        conn.close()
 
-    responses = {
-        "songs": "🎵 গান\n\nকী ধরনের গান খুঁজছ, লিখে পাঠাও।",
-        "dance": "💃 নাচ\n\nনাচ সম্পর্কিত কী খুঁজছ, লিখে পাঠাও।",
-        "drama": "🎬 নাটক\n\nনাটক সম্পর্কিত অনুরোধ লিখে পাঠাও।",
-        "captions": "✍️ ক্যাপশন\n\nছবি বা ভিডিওর বিষয় লিখে পাঠাও।",
-        "help": "❓ সাহায্য\n\nতোমার প্রশ্নটি লিখে পাঠাও।",
-        "admin": (
-            f"👤 Admin Contact\n\nযোগাযোগ: @{ADMIN_USERNAME}"
-            if ADMIN_USERNAME
-            else "👤 Admin Contact\n\n"
-                 "Admin username সেট করা হয়নি।"
-        ),
-    }
 
-    await query.message.reply_text(
-        responses.get(
-            query.data,
-            "মেনু থেকে একটি অপশন নির্বাচন করো।",
-        ),
-        reply_markup=main_menu(),
+@app.delete("/api/videos/<int:video_id>")
+@admin_only
+def delete_video(video_id):
+    conn = connect_db()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    DELETE FROM live_store_videos WHERE id=%s
+                    RETURNING video_file, thumbnail_file
+                """, (video_id,))
+                row = cur.fetchone()
+                if not row:
+                    return jsonify({"error": "ভিডিও পাওয়া যায়নি"}), 404
+                files = [row["video_file"], row["thumbnail_file"]]
+    finally:
+        conn.close()
+
+    for name in files:
+        if name:
+            (UPLOAD_DIR / name).unlink(missing_ok=True)
+
+    return jsonify({"ok": True})
+
+
+@app.errorhandler(413)
+def file_too_large(_error):
+    return jsonify({"error": "ফাইল ১০০ MB-এর বেশি। ছোট ফাইল দিন।"}), 413
+
+
+# Telegram bot menu
+MENU = [
+    ["🎵 গান", "💃 নাচ"],
+    ["🎬 নাটক", "✍️ ক্যাপশন"],
+    ["🆘 সাহায্য", "👤 অ্যাডমিন যোগাযোগ"],
+]
+
+
+async def start(update, context):
+    await update.message.reply_text(
+        "স্বাগতম Live Store Bot-এ!",
+        reply_markup=ReplyKeyboardMarkup(MENU, resize_keyboard=True)
     )
 
 
-# Automatic replies
-async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    message = update.effective_message
+async def help_command(update, context):
+    await update.message.reply_text(
+        "মেনু থেকে গান, নাচ, নাটক, ক্যাপশন বা সাহায্য বেছে নিন।"
+    )
 
-    if not message or not message.text:
+
+async def auto_reply(update, context):
+    if not update.message or not update.message.text:
         return
 
-    text = message.text.strip().lower()
-
-    if any(word in text for word in ("হাই", "হ্যালো", "hello", "hi")):
-        reply = "👋 হ্যালো! Live Store বটে স্বাগতম। কী সাহায্য লাগবে?"
-
-    elif any(word in text for word in ("গান", "song", "music")):
-        reply = "🎵 কী ধরনের গান খুঁজছ? বিস্তারিত লিখে পাঠাও।"
-
-    elif any(word in text for word in ("নাচ", "dance")):
-        reply = "💃 নাচ সম্পর্কিত কী খুঁজছ? লিখে পাঠাও।"
-
-    elif any(word in text for word in ("নাটক", "drama")):
-        reply = "🎬 নাটক সম্পর্কে তোমার অনুরোধ লিখে পাঠাও।"
-
-    elif any(word in text for word in ("ক্যাপশন", "caption")):
-        reply = "✍️ ছবির বা ভিডিওর বিষয় লিখো।"
-
-    elif any(word in text for word in ("সাহায্য", "help")):
-        reply = "❓ নিচের মেনু থেকে Help নির্বাচন করো।"
-
+    msg = update.message.text.lower()
+    if "গান" in msg:
+        answer = "🎵 গান বিভাগ"
+    elif "নাচ" in msg:
+        answer = "💃 নাচ বিভাগ"
+    elif "নাটক" in msg:
+        answer = "🎬 নাটক বিভাগ"
+    elif "ক্যাপশন" in msg:
+        answer = "✍️ ক্যাপশন: সময় বদলায়, অভিজ্ঞতা মানুষকে বদলে দেয়।"
+    elif "সাহায্য" in msg:
+        answer = "🆘 সাহায্যের জন্য অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
+    elif "অ্যাডমিন" in msg or "যোগাযোগ" in msg:
+        answer = "অ্যাডমিন: @" + ADMIN_USERNAME.lstrip("@")
     else:
-        reply = (
-            "💜 তোমার মেসেজ পেয়েছি!\n"
-            "গান, নাচ, নাটক বা ক্যাপশন সম্পর্কে জানতে "
-            "নিচের মেনু ব্যবহার করো।"
-        )
+        answer = "মেসেজ পেয়েছি 😊 নিচের মেনু ব্যবহার করুন।"
 
-    await message.reply_text(
-        reply,
-        reply_markup=main_menu(),
+    await update.message.reply_text(
+        answer,
+        reply_markup=ReplyKeyboardMarkup(MENU, resize_keyboard=True)
     )
 
 
-# Bot commands
-async def post_init(application: Application):
-    await application.bot.set_my_commands([
-        ("start", "Open Live Store menu"),
-        ("help", "Get help"),
-    ])
+def run_web():
+    port = int(os.getenv("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError(
-            "BOT_TOKEN environment variable is required"
-        )
+    setup_db()
+    threading.Thread(target=run_web, daemon=True).start()
 
-    # Start web server for Render
-    web_thread = Thread(
-        target=run_web_server,
-        daemon=True,
+    bot = Application.builder().token(BOT_TOKEN).build()
+    bot.add_handler(CommandHandler("start", start))
+    bot.add_handler(CommandHandler("help", help_command))
+    bot.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, auto_reply)
     )
-    web_thread.start()
-
-    # Start Telegram bot
-    application = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(menu_callback))
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message,
-        )
-    )
-
-    logger.info("Live Store Telegram bot is starting...")
-    application.run_polling(drop_pending_updates=False)
+    log.info("Live Store web server and Telegram bot starting")
+    bot.run_polling()
 
 
 if __name__ == "__main__":
