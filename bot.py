@@ -1,5 +1,8 @@
 import os
 import logging
+from threading import Thread
+
+from flask import Flask
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -15,17 +18,42 @@ from telegram.ext import (
     filters,
 )
 
+# Logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip().lstrip("@")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "").strip()
 
+# Web server for Render
+web_app = Flask(__name__)
 
+
+@web_app.route("/")
+def home():
+    return "Live Store Bot is running!", 200
+
+
+@web_app.route("/health")
+def health():
+    return {"status": "ok"}, 200
+
+
+def run_web_server():
+    port = int(os.getenv("PORT", "10000"))
+    web_app.run(
+        host="0.0.0.0",
+        port=port,
+        use_reloader=False,
+    )
+
+
+# Main menu
 def main_menu():
     keyboard = [
         [
@@ -53,17 +81,38 @@ def main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Start command
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     message = update.effective_message
 
     if message:
         await message.reply_text(
             "✨ Welcome to Live Store!\n\n"
-            "তোমার পছন্দের ক্যাটাগরি বেছে নাও।",
+            "স্বাগতম! নিচের মেনু থেকে তোমার পছন্দের "
+            "ক্যাটাগরি বেছে নাও।",
             reply_markup=main_menu(),
         )
 
 
+# Help command
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    message = update.effective_message
+
+    if message:
+        await message.reply_text(
+            "❓ কী সাহায্য প্রয়োজন, লিখে পাঠাও।\n"
+            "অথবা নিচের মেনু থেকে একটি অপশন বেছে নাও।",
+            reply_markup=main_menu(),
+        )
+
+
+# Button responses
 async def menu_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -76,30 +125,29 @@ async def menu_callback(
     await query.answer()
 
     responses = {
-        "songs": "🎵 গান\n\nগান সম্পর্কিত অনুরোধ লিখো।",
-        "dance": "💃 নাচ\n\nনাচের ভিডিও বা তথ্যের অনুরোধ লিখো।",
-        "drama": "🎬 নাটক\n\nনাটক সম্পর্কিত অনুরোধ লিখো।",
-        "captions": "✍️ ক্যাপশন\n\nকী ধরনের ক্যাপশন চাও, লিখে পাঠাও।",
-        "help": (
-            "❓ সাহায্য\n\n"
-            "মেনু থেকে ক্যাটাগরি নির্বাচন করো অথবা তোমার প্রশ্ন লিখে পাঠাও।"
-        ),
+        "songs": "🎵 গান\n\nকী ধরনের গান খুঁজছ, লিখে পাঠাও।",
+        "dance": "💃 নাচ\n\nনাচ সম্পর্কিত কী খুঁজছ, লিখে পাঠাও।",
+        "drama": "🎬 নাটক\n\nনাটক সম্পর্কিত অনুরোধ লিখে পাঠাও।",
+        "captions": "✍️ ক্যাপশন\n\nছবি বা ভিডিওর বিষয় লিখে পাঠাও।",
+        "help": "❓ সাহায্য\n\nতোমার প্রশ্নটি লিখে পাঠাও।",
         "admin": (
-            f"👤 Admin Contact\n\n"
-            f"যোগাযোগ: @{ADMIN_USERNAME}"
+            f"👤 Admin Contact\n\nযোগাযোগ: @{ADMIN_USERNAME}"
             if ADMIN_USERNAME
-            else "👤 Admin Contact\n\nAdmin username এখনো সেট করা হয়নি।"
+            else "👤 Admin Contact\n\n"
+                 "Admin username সেট করা হয়নি।"
         ),
     }
 
-    text = responses.get(query.data, "মেনু থেকে একটি অপশন নির্বাচন করো।")
-
     await query.message.reply_text(
-        text,
+        responses.get(
+            query.data,
+            "মেনু থেকে একটি অপশন নির্বাচন করো।",
+        ),
         reply_markup=main_menu(),
     )
 
 
+# Automatic replies
 async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -113,41 +161,41 @@ async def handle_message(
 
     if any(word in text for word in ("হাই", "হ্যালো", "hello", "hi")):
         reply = "👋 হ্যালো! Live Store বটে স্বাগতম। কী সাহায্য লাগবে?"
+
     elif any(word in text for word in ("গান", "song", "music")):
-        reply = "🎵 কী ধরনের গান খুঁজছ? তোমার পছন্দ লিখে পাঠাও।"
+        reply = "🎵 কী ধরনের গান খুঁজছ? বিস্তারিত লিখে পাঠাও।"
+
     elif any(word in text for word in ("নাচ", "dance")):
-        reply = "💃 নাচ সম্পর্কিত কী খুঁজছ? বিস্তারিত লিখে পাঠাও।"
+        reply = "💃 নাচ সম্পর্কিত কী খুঁজছ? লিখে পাঠাও।"
+
     elif any(word in text for word in ("নাটক", "drama")):
-        reply = "🎬 কোন ধরনের নাটক খুঁজছ? তোমার অনুরোধ পাঠাও।"
+        reply = "🎬 নাটক সম্পর্কে তোমার অনুরোধ লিখে পাঠাও।"
+
     elif any(word in text for word in ("ক্যাপশন", "caption")):
-        reply = "✍️ ছবির বা ভিডিওর বিষয় লিখো, আমি ক্যাপশন তৈরিতে সাহায্য করব।"
+        reply = "✍️ ছবির বা ভিডিওর বিষয় লিখো।"
+
     elif any(word in text for word in ("সাহায্য", "help")):
-        reply = "❓ সাহায্যের জন্য নিচের মেনু থেকে Help নির্বাচন করো।"
+        reply = "❓ নিচের মেনু থেকে Help নির্বাচন করো।"
+
     else:
         reply = (
             "💜 তোমার মেসেজ পেয়েছি!\n"
-            "গান, নাচ, নাটক বা ক্যাপশন সম্পর্কে জানতে নিচের মেনু ব্যবহার করো।"
+            "গান, নাচ, নাটক বা ক্যাপশন সম্পর্কে জানতে "
+            "নিচের মেনু ব্যবহার করো।"
         )
 
-    await message.reply_text(reply, reply_markup=main_menu())
+    await message.reply_text(
+        reply,
+        reply_markup=main_menu(),
+    )
 
 
+# Bot commands
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         ("start", "Open Live Store menu"),
         ("help", "Get help"),
     ])
-
-
-async def help_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    if update.effective_message:
-        await update.effective_message.reply_text(
-            "কী সাহায্য প্রয়োজন, লিখে পাঠাও।",
-            reply_markup=main_menu(),
-        )
 
 
 def main():
@@ -156,6 +204,14 @@ def main():
             "BOT_TOKEN environment variable is required"
         )
 
+    # Start web server for Render
+    web_thread = Thread(
+        target=run_web_server,
+        daemon=True,
+    )
+    web_thread.start()
+
+    # Start Telegram bot
     application = (
         Application.builder()
         .token(BOT_TOKEN)
