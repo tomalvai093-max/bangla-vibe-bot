@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Store Admin</title>
+<style>
+body{margin:0;background:#0b1220;color:white;font-family:Arial,sans-serif}
+main{max-width:700px;margin:auto;padding:16px}
+section,.item{background:#172438;padding:16px;border-radius:12px;margin:14px 0}
+input{box-sizing:border-box;width:100%;padding:12px;margin:7px 0;background:#0b1220;color:white;border:1px solid #50627b;border-radius:8px}
+button{padding:11px;margin:5px 3px 5px 0;border:0;border-radius:8px;background:#2478db;color:white;font-weight:bold}
+.danger{background:#b83245}.hide{display:none}
+.item img{width:120px;vertical-align:middle;margin-right:10px}
+a{color:#bcdcff}
+</style>
+</head>
+<body>
+<main>
+<h1>🔐 Live Store Admin</h1>
+<a href="/">ওয়েবসাইটে ফিরে যান</a>
+
+<section id="login">
+<h2>Admin Login</h2>
+<input id="user" placeholder="Admin Username" autocomplete="username">
+<input id="pass" type="password" placeholder="Password" autocomplete="current-password">
+<button onclick="login()">Login</button>
+</section>
+
+<div id="panel" class="hide">
+<section>
+<h2>নতুন ভিডিও আপলোড</h2>
+<form id="form">
+<label>ভিডিওর নাম</label>
+<input name="title" required maxlength="200" placeholder="ভিডিওর নাম">
+<label>ফোন থেকে ভিডিও</label>
+<input name="video" type="file" accept="video/mp4,video/webm,video/quicktime" required>
+<label>গ্যালারি থেকে থাম্বনেইল</label>
+<input name="thumbnail" type="file" accept="image/*" required>
+<p>সর্বোচ্চ ১০০ MB।</p>
+<button id="upload" type="submit">আপলোড করুন</button>
+</form>
+</section>
+<section>
+<h2>ভিডিও তালিকা</h2>
+<button onclick="logout()">Logout</button>
+<div id="list"></div>
+</section>
+</div>
+<p id="msg"></p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+async function api(url,options={}){
+ const r=await fetch(url,{credentials:'same-origin',...options});
+ const d=await r.json();
+ if(!r.ok)throw Error(d.error||'সমস্যা হয়েছে');
+ return d;
+}
+async function login(){
+ try{
+  await api('/api/admin/login',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({username:$('user').value,password:$('pass').value})
+  });
+  $('pass').value='';
+  await check();
+  $('msg').textContent='লগইন সফল';
+ }catch(e){$('msg').textContent=e.message}
+}
+async function check(){
+ const d=await api('/api/admin/session');
+ $('login').classList.toggle('hide',d.logged_in);
+ $('panel').classList.toggle('hide',!d.logged_in);
+ if(d.logged_in)await loadVideos();
+}
+async function logout(){
+ try{await api('/api/admin/logout',{method:'POST'});await check()}
+ catch(e){$('msg').textContent=e.message}
+}
+$('form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const btn=$('upload');btn.disabled=true;$('msg').textContent='আপলোড হচ্ছে...';
+ try{
+  await api('/api/videos',{method:'POST',body:new FormData(e.target)});
+  e.target.reset();$('msg').textContent='ভিডিও আপলোড হয়েছে';await loadVideos();
+ }catch(err){$('msg').textContent=err.message}
+ finally{btn.disabled=false}
+});
+async function loadVideos(){
+ try{
+  const videos=await api('/api/videos');const list=$('list');list.replaceChildren();
+  videos.forEach(v=>{
+   const item=document.createElement('div');item.className='item';
+   const img=document.createElement('img');img.src=v.thumbnail_url;img.alt='';
+   const title=document.createElement('b');title.textContent=v.title;
+   const rename=document.createElement('button');rename.textContent='নাম পরিবর্তন';
+   rename.onclick=async()=>{
+    const name=prompt('নতুন নাম লিখুন',v.title);
+    if(!name||!name.trim())return;
+    try{await api('/api/videos/'+v.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:name.trim()})});await loadVideos()}
+    catch(e){$('msg').textContent=e.message}
+   };
+   const del=document.createElement('button');del.className='danger';del.textContent='ডিলিট';
+   del.onclick=async()=>{
+    if(!confirm('ভিডিওটি মুছে ফেলবেন?'))return;
+    try{await api('/api/videos/'+v.id,{method:'DELETE'});await loadVideos();$('msg').textContent='মুছে ফেলা হয়েছে'}
+    catch(e){$('msg').textContent=e.message}
+   };
+   item.append(img,title,document.createElement('br'),rename,del);list.append(item);
+  });
+  if(!videos.length)list.textContent='এখনো কোনো ভিডিও নেই।';
+ }catch(e){$('msg').textContent=e.message}
+}
+check();
+</script>
+</body>
+</html>
