@@ -1,81 +1,50 @@
--- ====================================================================
--- Viral Zone 🔥 — PostgreSQL Safe Schema Setup & Migration Script
--- ====================================================================
--- This script is 100% SAFE: No DROP TABLE, No TRUNCATE, No Data Loss.
--- Resolves: NotNullViolationError in column "name" of relation "contacts"
+-- Live Store | Database Setup
+-- Database: PostgreSQL
 
--- 1. Contacts / Users Table
-CREATE TABLE IF NOT EXISTS contacts (
-    id BIGSERIAL PRIMARY KEY,
-    telegram_id BIGINT UNIQUE,
-    name TEXT NOT NULL DEFAULT 'Viral Zone User',
-    username TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-
--- Ensure telegram_id column exists if table was created previously
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name='contacts' AND column_name='telegram_id'
-    ) THEN
-        ALTER TABLE contacts ADD COLUMN telegram_id BIGINT UNIQUE;
-    END IF;
-END $$;
-
--- Fix NotNullViolation on 'name' column: ensure default and NOT NULL safety
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name='contacts' AND column_name='name'
-    ) THEN
-        ALTER TABLE contacts ADD COLUMN name TEXT NOT NULL DEFAULT 'Viral Zone User';
-    ELSE
-        -- Update any existing NULL names to default before enforcing constraint
-        UPDATE contacts SET name = 'Viral Zone User' WHERE name IS NULL;
-        ALTER TABLE contacts ALTER COLUMN name SET DEFAULT 'Viral Zone User';
-    END IF;
-END $$;
-
--- 2. Categories Table
 CREATE TABLE IF NOT EXISTS categories (
-    id SERIAL PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
-    icon TEXT DEFAULT '🎬',
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Insert Default Categories safely
-INSERT INTO categories (name, icon) VALUES 
-('🎵 গান', '🎵'),
-('🎭 নাটক', '🎭'),
-('🎬 ভিডিও', '🎬'),
-('📸 ফটো', '📸'),
-('🎥 মুভি', '🎥')
+CREATE TABLE IF NOT EXISTS videos (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    video_url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    category_id BIGINT REFERENCES categories(id)
+        ON DELETE SET NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_videos_category
+    ON videos(category_id);
+
+CREATE INDEX IF NOT EXISTS idx_videos_active_created
+    ON videos(is_active, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    setting_key VARCHAR(100) PRIMARY KEY,
+    setting_value TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO categories (name)
+VALUES
+    ('Music'),
+    ('Dance'),
+    ('Drama'),
+    ('Entertainment')
 ON CONFLICT (name) DO NOTHING;
 
--- 3. Contents Table
-CREATE TABLE IF NOT EXISTS contents (
-    id SERIAL PRIMARY KEY,
-    file_id TEXT NOT NULL,
-    media_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT DEFAULT '',
-    category TEXT NOT NULL,
-    thumbnail_file_id TEXT,
-    views INT DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-
--- Ensure views column exists
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name='contents' AND column_name='views'
-    ) THEN
-        ALTER TABLE contents ADD COLUMN views INT DEFAULT 0;
-    END IF;
-END $$;
+INSERT INTO app_settings (setting_key, setting_value)
+VALUES
+    ('app_name', 'Live Store'),
+    ('app_title', 'Live Store | Premium Video')
+ON CONFLICT (setting_key)
+DO UPDATE SET
+    setting_value = EXCLUDED.setting_value,
+    updated_at = NOW();
