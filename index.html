@@ -1,70 +1,59 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="bn">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#0B0B12">
-  <meta name="description" content="Live Store | Premium Video">
-  <title>Live Store | Premium Video</title>
-
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-  <link rel="stylesheet" href="style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Store</title>
+<style>
+body{margin:0;background:#0b1220;color:white;font-family:Arial,sans-serif}
+header{padding:20px;background:#142b49}
+main{max-width:1000px;margin:auto;padding:15px}
+a{color:#bcdcff}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.card{background:#172438;border-radius:12px;overflow:hidden;padding-bottom:12px}
+img{width:100%;aspect-ratio:16/9;object-fit:cover}
+h3{padding:0 12px}
+video{width:100%;background:black}
+</style>
 </head>
 <body>
-  <div class="app">
-    <header class="header">
-      <div class="logo" aria-label="Live Store logo">L</div>
-      <div class="brand">
-        <div class="brand-name">Live Store</div>
-        <div class="brand-subtitle">YOUR PREMIUM VIDEO DESTINATION</div>
-      </div>
-    </header>
-
-    <main>
-      <section class="hero">
-        <div class="status">
-          <span class="status-dot"></span>
-          PREMIUM EXPERIENCE
-        </div>
-
-        <h1>Welcome to<br>
-          <span class="gradient-text">Live Store</span>
-        </h1>
-
-        <p>
-          Discover your favorite videos in a modern,
-          immersive and premium viewing experience.
-        </p>
-
-        <div class="hero-decoration" aria-hidden="true"></div>
-      </section>
-
-      <section class="videos-section">
-        <div class="section-heading">
-          <h2>Explore Live Store</h2>
-          <span class="premium-badge">✦ PREMIUM</span>
-        </div>
-
-        <div id="video-list" class="video-list">
-          <div class="empty-state">
-            <div class="play-icon">▶</div>
-            <h3>Welcome to Live Store</h3>
-            <p>Your videos will appear here.</p>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <footer class="footer">
-      Powered by <span>Live Store</span>
-    </footer>
-  </div>
-
-  <script src="app.js"></script>
+<header>
+<h1>📺 Live Store</h1>
+<a href="/admin">Admin Panel</a>
+</header>
+<main>
+<p id="status">ভিডিও লোড হচ্ছে...</p>
+<div class="grid" id="videos"></div>
+</main>
+<script>
+async function load(){
+ const status=document.getElementById('status');
+ const box=document.getElementById('videos');
+ try{
+  const res=await fetch('/api/videos');
+  const videos=await res.json();
+  if(!res.ok)throw Error(videos.error||'লোড করা যায়নি');
+  box.replaceChildren();
+  status.textContent=videos.length?'':'এখনো কোনো ভিডিও নেই।';
+  videos.forEach(v=>{
+   const card=document.createElement('div');
+   card.className='card';
+   const img=document.createElement('img');
+   img.src=v.thumbnail_url;
+   img.alt=v.title;
+   const title=document.createElement('h3');
+   title.textContent=v.title;
+   const video=document.createElement('video');
+   video.controls=true;
+   video.preload='none';
+   video.src=v.video_url;
+   video.poster=v.thumbnail_url;
+   card.append(img,title,video);
+   box.append(card);
+  });
+ }catch(e){status.textContent=e.message}
+}
+load();
+</script>
 </body>
-  </html>
+</html>
