@@ -1,609 +1,70 @@
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0B0B12">
+  <meta name="description" content="Live Store | Premium Video">
+  <title>Live Store | Premium Video</title>
 
-<meta
-  name="viewport"
-  content="width=device-width, initial-scale=1.0"
-/>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-<title>Bangla Vibe</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-<style>
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  min-height: 100%;
-  background: #05010b;
-  color: white;
-  font-family:
-    Arial,
-    "Noto Sans Bengali",
-    sans-serif;
-}
-
-body {
-  display: flex;
-  justify-content: center;
-}
-
-.container {
-  width: 100%;
-  max-width: 650px;
-  padding: 18px;
-}
-
-.logo {
-  text-align: center;
-  font-size: 30px;
-  font-weight: bold;
-  margin: 10px 0 20px;
-  color: #ffffff;
-  text-shadow:
-    0 0 8px #b000ff,
-    0 0 20px #ff00d4;
-}
-
-.card {
-  width: 100%;
-  background: #0d0715;
-  border: 1px solid #7b00ff;
-  border-radius: 20px;
-  overflow: hidden;
-  box-shadow:
-    0 0 12px rgba(145, 0, 255, .5),
-    0 0 30px rgba(255, 0, 212, .15);
-}
-
-.media-area {
-  width: 100%;
-  background: #000;
-  position: relative;
-  min-height: 230px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.thumbnail {
-  width: 100%;
-  max-height: 390px;
-  object-fit: cover;
-  display: block;
-}
-
-.player {
-  width: 100%;
-  max-height: 430px;
-  display: block;
-  background: #000;
-}
-
-.audio-box {
-  width: 100%;
-  padding: 35px 20px;
-  background: #08030e;
-}
-
-.audio-box audio {
-  width: 100%;
-}
-
-.hidden {
-  display: none !important;
-}
-
-.info {
-  padding: 18px;
-}
-
-.title {
-  font-size: 22px;
-  font-weight: bold;
-  line-height: 1.35;
-  color: #fff;
-  margin-bottom: 10px;
-}
-
-.description {
-  color: #bdb4c9;
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-
-.category {
-  display: inline-block;
-  margin-top: 12px;
-  padding: 6px 12px;
-  border-radius: 20px;
-  background: #1b0c2b;
-  border: 1px solid #8d00ff;
-  color: #e3b9ff;
-  font-size: 13px;
-}
-
-.action {
-  padding: 0 18px 20px;
-}
-
-button {
-  width: 100%;
-  border: 0;
-  border-radius: 14px;
-  padding: 15px;
-  font-size: 17px;
-  font-weight: bold;
-  color: white;
-  background: linear-gradient(
-    90deg,
-    #7b00ff,
-    #ff00d4
-  );
-  box-shadow:
-    0 0 12px rgba(255, 0, 212, .35);
-  cursor: pointer;
-}
-
-button:disabled {
-  opacity: .65;
-}
-
-.status {
-  text-align: center;
-  padding: 12px 18px;
-  color: #aaa;
-  font-size: 14px;
-}
-
-.ad-note {
-  text-align: center;
-  color: #8eeeff;
-  font-size: 13px;
-  margin-top: 10px;
-}
-
-.error {
-  text-align: center;
-  padding: 40px 20px;
-  color: #ff8de8;
-}
-
-</style>
+  <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-
-<div class="container">
-
-  <div class="logo">
-    🔥 Bangla Vibe
-  </div>
-
-  <div id="loading" class="status">
-    Content লোড হচ্ছে...
-  </div>
-
-  <div id="error" class="error hidden">
-    Content পাওয়া যায়নি।
-  </div>
-
-  <div id="contentCard" class="card hidden">
-
-    <!-- ======================================
-         MEDIA AREA
-         প্রথমে এখানে Thumbnail থাকবে
-         Unlock করার পর একই জায়গায় Media আসবে
-         ====================================== -->
-
-    <div id="mediaArea" class="media-area">
-
-      <img
-        id="thumbnail"
-        class="thumbnail"
-        src=""
-        alt="Thumbnail"
-      >
-
-      <video
-        id="videoPlayer"
-        class="player hidden"
-        controls
-        playsinline
-        preload="metadata"
-      ></video>
-
-      <div
-        id="audioBox"
-        class="audio-box hidden"
-      >
-        <audio
-          id="audioPlayer"
-          controls
-          preload="metadata"
-        ></audio>
+  <div class="app">
+    <header class="header">
+      <div class="logo" aria-label="Live Store logo">L</div>
+      <div class="brand">
+        <div class="brand-name">Live Store</div>
+        <div class="brand-subtitle">YOUR PREMIUM VIDEO DESTINATION</div>
       </div>
+    </header>
 
-      <img
-        id="photoPlayer"
-        class="player hidden"
-        src=""
-        alt="Photo"
-      >
+    <main>
+      <section class="hero">
+        <div class="status">
+          <span class="status-dot"></span>
+          PREMIUM EXPERIENCE
+        </div>
 
-    </div>
+        <h1>Welcome to<br>
+          <span class="gradient-text">Live Store</span>
+        </h1>
 
-    <!-- ======================================
-         INFO
-         ====================================== -->
+        <p>
+          Discover your favorite videos in a modern,
+          immersive and premium viewing experience.
+        </p>
 
-    <div class="info">
+        <div class="hero-decoration" aria-hidden="true"></div>
+      </section>
 
-      <div
-        id="title"
-        class="title"
-      ></div>
+      <section class="videos-section">
+        <div class="section-heading">
+          <h2>Explore Live Store</h2>
+          <span class="premium-badge">✦ PREMIUM</span>
+        </div>
 
-      <div
-        id="description"
-        class="description"
-      ></div>
+        <div id="video-list" class="video-list">
+          <div class="empty-state">
+            <div class="play-icon">▶</div>
+            <h3>Welcome to Live Store</h3>
+            <p>Your videos will appear here.</p>
+          </div>
+        </div>
+      </section>
+    </main>
 
-      <div
-        id="category"
-        class="category"
-      ></div>
-
-    </div>
-
-    <!-- ======================================
-         BUTTON
-         ====================================== -->
-
-    <div
-      id="action"
-      class="action"
-    >
-
-      <button
-        id="watchButton"
-        onclick="openAd()"
-      >
-        ▶️ Content দেখুন
-      </button>
-
-      <div class="ad-note">
-        প্রথমে বিজ্ঞাপন খুলবে, তারপর Content Unlock হবে।
-      </div>
-
-    </div>
-
-    <div
-      id="status"
-      class="status"
-    ></div>
-
+    <footer class="footer">
+      Powered by <span>Live Store</span>
+    </footer>
   </div>
 
-</div>
-
-
-<script>
-
-const tg =
-  window.Telegram &&
-  window.Telegram.WebApp
-    ? window.Telegram.WebApp
-    : null;
-
-if (tg) {
-  tg.ready();
-  tg.expand();
-}
-
-
-/* =====================================================
-   ADS
-   ===================================================== */
-
-const AD_URL =
-  "https://www.profitableratecpmnetwork.com/cc0kqkj3?key=96d4caaba1f61e2b9329ad0d07861cf4";
-
-
-/* =====================================================
-   GET MEDIA ID
-   ===================================================== */
-
-const params =
-  new URLSearchParams(
-    window.location.search
-  );
-
-const mediaId =
-  params.get("media_id");
-
-
-/* =====================================================
-   ELEMENTS
-   ===================================================== */
-
-const loading =
-  document.getElementById("loading");
-
-const errorBox =
-  document.getElementById("error");
-
-const card =
-  document.getElementById("contentCard");
-
-const thumbnail =
-  document.getElementById("thumbnail");
-
-const videoPlayer =
-  document.getElementById("videoPlayer");
-
-const audioBox =
-  document.getElementById("audioBox");
-
-const audioPlayer =
-  document.getElementById("audioPlayer");
-
-const photoPlayer =
-  document.getElementById("photoPlayer");
-
-const title =
-  document.getElementById("title");
-
-const description =
-  document.getElementById("description");
-
-const category =
-  document.getElementById("category");
-
-const action =
-  document.getElementById("action");
-
-const watchButton =
-  document.getElementById("watchButton");
-
-const statusBox =
-  document.getElementById("status");
-
-
-/* =====================================================
-   LOAD MEDIA
-   ===================================================== */
-
-let mediaData = null;
-
-async function loadMedia() {
-
-  if (!mediaId) {
-
-    loading.classList.add("hidden");
-    errorBox.classList.remove("hidden");
-
-    errorBox.textContent =
-      "❌ Media ID পাওয়া যায়নি।";
-
-    return;
-  }
-
-  try {
-
-    const response =
-      await fetch(
-        "/api/media/" + mediaId
-      );
-
-    if (!response.ok) {
-      throw new Error(
-        "Media not found"
-      );
-    }
-
-    mediaData =
-      await response.json();
-
-    loading.classList.add("hidden");
-
-    card.classList.remove("hidden");
-
-    title.textContent =
-      mediaData.title || "";
-
-    description.textContent =
-      mediaData.description || "";
-
-    category.textContent =
-      mediaData.category || "";
-
-    /* -----------------------------------------
-       Thumbnail
-       ----------------------------------------- */
-
-    if (mediaData.thumbnail) {
-
-      thumbnail.src =
-        mediaData.thumbnail;
-
-    } else {
-
-      thumbnail.classList.add(
-        "hidden"
-      );
-    }
-
-  } catch (error) {
-
-    console.error(error);
-
-    loading.classList.add("hidden");
-
-    errorBox.classList.remove(
-      "hidden"
-    );
-
-    errorBox.textContent =
-      "❌ Content লোড করা যায়নি।";
-  }
-}
-
-
-/* =====================================================
-   OPEN AD
-   ===================================================== */
-
-function openAd() {
-
-  if (!mediaData) {
-    return;
-  }
-
-  /*
-   SmartLink direct user action থেকে open করা হচ্ছে।
-   Browser popup restriction কমানোর জন্য
-   function সরাসরি button click থেকে চালানো হয়েছে।
-  */
-
-  let adWindow = null;
-
-  try {
-
-    adWindow =
-      window.open(
-        AD_URL,
-        "_blank"
-      );
-
-  } catch (e) {
-
-    console.log(e);
-
-  }
-
-  /*
-   Ad খুলে গেলে user Web App-এ ফিরে এসে
-   Unlock Content চাপবে।
-  */
-
-  watchButton.textContent =
-    "🔓 ফিরে এসে Content Unlock করুন";
-
-  watchButton.onclick =
-    unlockContent;
-
-  statusBox.textContent =
-    "বিজ্ঞাপনটি দেখে/ভিজিট করে এই Web App-এ ফিরে আসুন।";
-
-}
-
-
-/* =====================================================
-   UNLOCK
-   ===================================================== */
-
-function unlockContent() {
-
-  if (!mediaData) {
-    return;
-  }
-
-  /*
-   Thumbnail সরানো হচ্ছে।
-   একই media-area-এর মধ্যে player দেখানো হবে।
-  */
-
-  thumbnail.classList.add(
-    "hidden"
-  );
-
-
-  /* ==============================================
-     VIDEO
-     ============================================== */
-
-  if (mediaData.type === "video") {
-
-    videoPlayer.src =
-      "/media/video/" +
-      mediaData.id;
-
-    videoPlayer.classList.remove(
-      "hidden"
-    );
-
-    videoPlayer.load();
-
-  }
-
-
-  /* ==============================================
-     AUDIO
-     ============================================== */
-
-  else if (mediaData.type === "audio") {
-
-    audioBox.classList.remove(
-      "hidden"
-    );
-
-    audioPlayer.src =
-      "/media/audio/" +
-      mediaData.id;
-
-    audioPlayer.load();
-
-  }
-
-
-  /* ==============================================
-     PHOTO
-     ============================================== */
-
-  else if (mediaData.type === "photo") {
-
-    photoPlayer.src =
-      "/media/photo/" +
-      mediaData.id;
-
-    photoPlayer.classList.remove(
-      "hidden"
-    );
-
-  }
-
-
-  /* ==============================================
-     BUTTON REMOVE
-     ============================================== */
-
-  action.classList.add(
-    "hidden"
-  );
-
-  statusBox.textContent =
-    "✅ Content Unlocked";
-
-}
-
-
-/* =====================================================
-   START
-   ===================================================== */
-
-loadMedia();
-
-</script>
-
+  <script src="app.js"></script>
 </body>
-    </html>
+  </html>
