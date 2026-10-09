@@ -13,6 +13,18 @@ services:
       - key: WEB_APP_URL
         sync: false
 
+  # Live Store API Server
+  - type: web
+    name: live-store-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+
   # Live Store Web App
   - type: web
     name: live-store-web
