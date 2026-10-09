@@ -1,28 +1,33 @@
 import os
-import uuid
+import asyncio
 import threading
 import logging
-from pathlib import Path
-from functools import wraps
 
+import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, request, jsonify, session, send_from_directory
-from werkzeug.utils import secure_filename
+
+from flask import (
+    Flask, request, jsonify, Response, stream_with_context
+)
+
 from telegram import (
     ReplyKeyboardMarkup,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
+    KeyboardButton,
+    WebAppInfo,
+    Update,
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    ContextTypes,
     filters,
 )
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
+log = logging.getLogger("live-store")
 
 # =========================
 # ENVIRONMENT VARIABLES
@@ -30,40 +35,22 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-SECRET_KEY = os.getenv("SECRET_KEY", "")
-
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 WEB_APP_URL = os.getenv("WEB_APP_URL", "").strip().rstrip("/")
+ADSTERRA_URL = os.getenv("ADSTERRA_URL", "").strip()
 
-# Render Environment-এ UPLOAD_DIR=/tmp/uploads দেওয়া যেতে পারে।
-# স্থায়ী ফাইলের জন্য Render Persistent Disk প্রয়োজন।
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-if not all([
-    BOT_TOKEN,
-    DATABASE_URL,
-    ADMIN_USERNAME,
-    ADMIN_PASSWORD,
-    SECRET_KEY,
-]):
+if not all([BOT_TOKEN, DATABASE_URL, ADMIN_TELEGRAM_ID, WEB_APP_URL]):
     raise RuntimeError(
-        "Render Environment Variables অসম্পূর্ণ। "
-        "BOT_TOKEN, DATABASE_URL, ADMIN_USERNAME, "
-        "ADMIN_PASSWORD ও SECRET_KEY সেট করুন।"
+        "Render Environment-এ BOT_TOKEN, DATABASE_URL, "
+        "ADMIN_TELEGRAM_ID এবং WEB_APP_URL দিতে হবে।"
     )
 
-app = Flask(__name__, static_folder="public")
-app.secret_key = SECRET_KEY
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = True
+if not ADMIN_TELEGRAM_ID.isdigit():
+    raise RuntimeError("ADMIN_TELEGRAM_ID অবশ্যই সংখ্যার Telegram ID হতে হবে।")
 
-VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v"}
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+ADMIN_ID = int(ADMIN_TELEGRAM_ID)
+
+app = Flask(__name__, static_folder="public")
 
 # =========================
 # DATABASE
@@ -72,13 +59,14 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 def connect_db():
     return psycopg2.connect(
         DATABASE_URL,
-        connect_timeout=10,
+        connect_timeout=15,
         sslmode="require",
     )
 
 
 def setup_db():
     conn = connect_db()
+
     try:
         with conn:
             with conn.cursor() as cur:
@@ -86,67 +74,447 @@ def setup_db():
                     CREATE TABLE IF NOT EXISTS live_store_videos (
                         id SERIAL PRIMARY KEY,
                         title TEXT NOT NULL,
-                        video_file TEXT NOT NULL,
+                        video_file TEXT NOT NULL DEFAULT '',
                         thumbnail_file TEXT NOT NULL DEFAULT '',
                         created_at TIMESTAMPTZ DEFAULT NOW()
                     )
                 """)
+
                 cur.execute("""
                     ALTER TABLE live_store_videos
-                    ADD COLUMN IF NOT EXISTS video_file
-                    TEXT NOT NULL DEFAULT ''
+                    ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'অন্যান্য'
                 """)
+
                 cur.execute("""
                     ALTER TABLE live_store_videos
-                    ADD COLUMN IF NOT EXISTS thumbnail_file
-                    TEXT NOT NULL DEFAULT ''
+                    ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''
                 """)
+
+                cur.execute("""
+                    ALTER TABLE live_store_videos
+                    ADD COLUMN IF NOT EXISTS video_file_id TEXT NOT NULL DEFAULT ''
+                """)
+
+                cur.execute("""
+                    ALTER TABLE live_store_videos
+                    ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT NOT NULL DEFAULT ''
+                """)
+
     finally:
         conn.close()
 
 
-# =========================
-# ADMIN AUTHENTICATION
-# =========================
-
-def admin_only(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not session.get("admin"):
-            return jsonify({
-                "error": "প্রথমে Admin Login করুন"
-            }), 401
-        return fn(*args, **kwargs)
-    return wrapper
-
-
-def save_upload(file, allowed):
-    if not file or not file.filename:
-        raise ValueError("ফাইল নির্বাচন করা হয়নি")
-
-    original = secure_filename(file.filename)
-    ext = Path(original).suffix.lower()
-
-    if ext not in allowed:
-        raise ValueError("এই ফাইলের ফরম্যাট অনুমোদিত নয়")
-
-    filename = uuid.uuid4().hex + ext
-    file.save(UPLOAD_DIR / filename)
-    return filename
+def is_admin(update: Update) -> bool:
+    user = update.effective_user
+    return bool(user and user.id == ADMIN_ID)
 
 
 # =========================
-# WEBSITE ROUTES
+# TELEGRAM KEYBOARDS
+# =========================
+
+def make_menu(admin=False):
+    open_button = KeyboardButton(
+        "▶ Open now",
+        web_app=WebAppInfo(url=WEB_APP_URL),
+    )
+
+    if admin:
+        rows = [
+            [open_button],
+            [KeyboardButton("📤 ভিডিও আপলোড")],
+            [KeyboardButton("❌ আপলোড বাতিল")],
+            [KeyboardButton("🎬 ভিডিও তালিকা")],
+        ]
+    else:
+        rows = [
+            [open_button],
+            [KeyboardButton("🎵 গান"), KeyboardButton("💃 নাচ")],
+            [KeyboardButton("🎬 নাটক"), KeyboardButton("✍️ ক্যাপশন")],
+            [KeyboardButton("🆘 সাহায্য"), KeyboardButton("👤 অ্যাডমিন যোগাযোগ")],
+        ]
+
+    return ReplyKeyboardMarkup(
+        rows,
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+# =========================
+# TELEGRAM COMMANDS
+# =========================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    context.user_data.pop("upload_step", None)
+    context.user_data.pop("upload_data", None)
+
+    if is_admin(update):
+        message = (
+            "🔐 Live Store Admin\n\n"
+            "ভিডিও আপলোড করতে 📤 ভিডিও আপলোড চাপুন।\n"
+            "ভিডিও দেখতে ▶ Open now চাপুন।"
+        )
+    else:
+        message = (
+            "🌌 স্বাগতম Live Store-এ!\n\n"
+            "ভিডিও দেখতে ▶ Open now চাপুন।"
+        )
+
+    await update.message.reply_text(
+        message,
+        reply_markup=make_menu(is_admin(update)),
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    if is_admin(update):
+        text = (
+            "Admin নির্দেশনা:\n"
+            "/upload - ভিডিও আপলোড\n"
+            "/cancel - আপলোড বাতিল\n"
+            "/videos - ভিডিও তালিকা"
+        )
+    else:
+        text = (
+            "Live Store ব্যবহার করতে ▶ Open now চাপুন।\n"
+            "সহায়তার জন্য অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
+        )
+
+    await update.message.reply_text(text)
+
+
+async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    if not is_admin(update):
+        await update.message.reply_text("⛔ এই সুবিধা শুধু Admin-এর জন্য।")
+        return
+
+    context.user_data["upload_step"] = "video"
+    context.user_data["upload_data"] = {}
+
+    await update.message.reply_text(
+        "📤 ভিডিও আপলোড শুরু হয়েছে।\n\n"
+        "এখন Telegram-এ ভিডিওটি পাঠাও।\n"
+        "ভিডিও ফাইল হিসেবে পাঠালেও হবে।"
+    )
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("upload_step", None)
+    context.user_data.pop("upload_data", None)
+
+    if update.message:
+        await update.message.reply_text(
+            "আপলোড বাতিল করা হয়েছে।",
+            reply_markup=make_menu(is_admin(update)),
+        )
+
+
+async def videos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    if not is_admin(update):
+        await update.message.reply_text("⛔ শুধু Admin এই তালিকা দেখতে পারবে।")
+        return
+
+    conn = connect_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, title, category
+                FROM live_store_videos
+                ORDER BY id DESC
+                LIMIT 30
+            """)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text("এখনো কোনো ভিডিও আপলোড করা হয়নি।")
+        return
+
+    lines = ["🎬 সর্বশেষ ভিডিওগুলো:"]
+    for video_id, title, category in rows:
+        lines.append(f"#{video_id} — {title} [{category}]")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+# =========================
+# ADMIN VIDEO UPLOAD FLOW
+# =========================
+
+async def handle_media(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return
+
+    if not is_admin(update):
+        await update.message.reply_text("⛔ ভিডিও আপলোডের অনুমতি নেই।")
+        return
+
+    step = context.user_data.get("upload_step")
+    data = context.user_data.setdefault("upload_data", {})
+
+    if step == "video":
+        message = update.message
+
+        if message.video:
+            data["video_file_id"] = message.video.file_id
+
+        elif (
+            message.document
+            and (message.document.mime_type or "").startswith("video/")
+        ):
+            data["video_file_id"] = message.document.file_id
+
+        else:
+            await message.reply_text(
+                "একটি ভিডিও পাঠাও। MP4 ভিডিও হলে ভালো।"
+            )
+            return
+
+        context.user_data["upload_step"] = "thumbnail"
+
+        await message.reply_text(
+            "✅ ভিডিও পেয়েছি।\n\n"
+            "এখন ভিডিওটির Thumbnail ছবি পাঠাও।\n"
+            "Gallery থেকে ছবি বেছে পাঠাতে পারো।"
+        )
+        return
+
+    if step == "thumbnail":
+        message = update.message
+
+        if message.photo:
+            data["thumbnail_file_id"] = message.photo[-1].file_id
+
+        elif (
+            message.document
+            and (message.document.mime_type or "").startswith("image/")
+        ):
+            data["thumbnail_file_id"] = message.document.file_id
+
+        else:
+            await message.reply_text(
+                "একটি ছবি পাঠাও। JPG বা PNG ব্যবহার করো।"
+            )
+            return
+
+        context.user_data["upload_step"] = "title"
+
+        await message.reply_text("📝 এখন ভিডিওর নাম লেখো।")
+        return
+
+    await update.message.reply_text(
+        "আগে 📤 ভিডিও আপলোড বাটনে চাপো।",
+        reply_markup=make_menu(True),
+    )
+
+
+async def handle_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.message.text:
+        return
+
+    message = update.message
+    text = message.text.strip()
+    lower = text.lower()
+
+    if text == "❌ আপলোড বাতিল":
+        await cancel_command(update, context)
+        return
+
+    if text == "📤 ভিডিও আপলোড":
+        await upload_command(update, context)
+        return
+
+    if text == "🎬 ভিডিও তালিকা":
+        await videos_command(update, context)
+        return
+
+    # Upload workflow
+    step = context.user_data.get("upload_step")
+
+    if step:
+        if not is_admin(update):
+            context.user_data.pop("upload_step", None)
+            context.user_data.pop("upload_data", None)
+            await message.reply_text("⛔ অনুমতি নেই।")
+            return
+
+        data = context.user_data.setdefault("upload_data", {})
+
+        if step == "title":
+            if len(text) < 1:
+                await message.reply_text("ভিডিওর নাম লিখো।")
+                return
+
+            data["title"] = text[:200]
+            context.user_data["upload_step"] = "category"
+
+            await message.reply_text(
+                "📂 Category লেখো।\n"
+                "উদাহরণ: নাটক, গান, নাচ, কমেডি"
+            )
+            return
+
+        if step == "category":
+            data["category"] = text[:80]
+            context.user_data["upload_step"] = "description"
+
+            await message.reply_text(
+                "📝 ভিডিওর Description লেখো।\n"
+                "না দিতে চাইলে /skip পাঠাও।"
+            )
+            return
+
+        if step == "description":
+            await save_video_record(
+                update,
+                context,
+                description=text,
+            )
+            return
+
+    # Normal user/admin menu replies
+    if "গান" in lower:
+        answer = "🎵 গান বিভাগ"
+    elif "নাচ" in lower:
+        answer = "💃 নাচ বিভাগ"
+    elif "নাটক" in lower:
+        answer = "🎬 নাটক বিভাগ"
+    elif "ক্যাপশন" in lower:
+        answer = "✍️ সময় বদলায়, অভিজ্ঞতা মানুষকে বদলে দেয়।"
+    elif "সাহায্য" in lower:
+        answer = "🆘 সাহায্যের জন্য অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
+    elif "অ্যাডমিন" in lower or "যোগাযোগ" in lower:
+        answer = "অ্যাডমিনের সঙ্গে যোগাযোগ করতে বটের মালিকের দেওয়া তথ্য ব্যবহার করুন।"
+    else:
+        answer = "Live Store ব্যবহার করতে ▶ Open now চাপুন।"
+
+    await message.reply_text(
+        answer,
+        reply_markup=make_menu(is_admin(update)),
+    )
+
+
+async def skip_description(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return
+
+    if not is_admin(update):
+        await update.message.reply_text("⛔ অনুমতি নেই।")
+        return
+
+    if context.user_data.get("upload_step") != "description":
+        await update.message.reply_text("এখন Description দেওয়ার ধাপ নয়।")
+        return
+
+    await save_video_record(update, context, description="")
+
+
+async def save_video_record(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    description: str,
+):
+    if not update.message:
+        return
+
+    data = context.user_data.get("upload_data", {})
+
+    required = [
+        "video_file_id",
+        "thumbnail_file_id",
+        "title",
+        "category",
+    ]
+
+    if not all(data.get(key) for key in required):
+        await update.message.reply_text(
+            "কিছু তথ্য পাওয়া যায়নি। /upload দিয়ে আবার শুরু করো।"
+        )
+        context.user_data.pop("upload_step", None)
+        context.user_data.pop("upload_data", None)
+        return
+
+    conn = connect_db()
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO live_store_videos
+                        (
+                            title,
+                            category,
+                            description,
+                            video_file_id,
+                            thumbnail_file_id,
+                            video_file,
+                            thumbnail_file
+                        )
+                    VALUES (%s, %s, %s, %s, %s, '', '')
+                    RETURNING id
+                """, (
+                    data["title"],
+                    data["category"],
+                    description[:2000],
+                    data["video_file_id"],
+                    data["thumbnail_file_id"],
+                ))
+
+                new_id = cur.fetchone()[0]
+
+    except Exception:
+        log.exception("Failed to save uploaded video")
+        await update.message.reply_text(
+            "❌ ভিডিও সংরক্ষণ করা যায়নি। Render Logs পরীক্ষা করো।"
+        )
+        return
+
+    finally:
+        conn.close()
+
+    context.user_data.pop("upload_step", None)
+    context.user_data.pop("upload_data", None)
+
+    await update.message.reply_text(
+        f"✅ ভিডিও সফলভাবে যোগ হয়েছে!\n"
+        f"ID: {new_id}\n"
+        f"নাম: {data['title']}\n"
+        f"Category: {data['category']}\n\n"
+        "User-রা Live Store Web App-এ ভিডিওটি দেখতে পারবে।",
+        reply_markup=make_menu(True),
+    )
+
+
+# =========================
+# PUBLIC VIDEO API
 # =========================
 
 @app.get("/")
 def home():
-    return send_from_directory("public", "index.html")
-
-
-@app.get("/admin")
-def admin_page():
-    return send_from_directory("public", "admin.html")
+    return app.send_static_file("index.html")
 
 
 @app.get("/health")
@@ -154,319 +522,170 @@ def health():
     return "Live Store is running", 200
 
 
-@app.get("/uploads/<path:filename>")
-def uploaded_file(filename):
-    return send_from_directory(UPLOAD_DIR, filename)
+@app.get("/api/config")
+def public_config():
+    return jsonify({
+        "name": "Live Store",
+        "ad_url": ADSTERRA_URL,
+    })
 
 
 @app.get("/api/videos")
 def list_videos():
     conn = connect_db()
+
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT id, title, video_file, thumbnail_file, created_at
+                SELECT
+                    id, title, category, description, created_at
                 FROM live_store_videos
+                WHERE video_file_id <> ''
+                  AND thumbnail_file_id <> ''
                 ORDER BY id DESC
             """)
             rows = [dict(row) for row in cur.fetchall()]
 
         for row in rows:
-            row["video_url"] = "/uploads/" + row["video_file"]
-            row["thumbnail_url"] = (
-                "/uploads/" + row["thumbnail_file"]
-                if row["thumbnail_file"] else ""
-            )
+            row["video_url"] = f"/media/{row['id']}"
+            row["thumbnail_url"] = f"/thumbnail/{row['id']}"
             row["created_at"] = str(row["created_at"])
 
         return jsonify(rows)
+
     finally:
         conn.close()
 
 
-@app.post("/api/admin/login")
-def login():
-    data = request.get_json(silent=True) or {}
+def get_file_id(video_id: int, column: str):
+    allowed = {"video_file_id", "thumbnail_file_id"}
 
-    if (
-        data.get("username") == ADMIN_USERNAME
-        and data.get("password") == ADMIN_PASSWORD
-    ):
-        session.clear()
-        session["admin"] = True
-        return jsonify({"ok": True})
+    if column not in allowed:
+        return None
 
-    return jsonify({
-        "error": "Username অথবা Password ভুল"
-    }), 401
-
-
-@app.get("/api/admin/session")
-def check_login():
-    return jsonify({
-        "logged_in": bool(session.get("admin"))
-    })
-
-
-@app.post("/api/admin/logout")
-@admin_only
-def logout():
-    session.clear()
-    return jsonify({"ok": True})
-
-
-@app.post("/api/videos")
-@admin_only
-def add_video():
-    title = (request.form.get("title") or "").strip()
-
-    if not title:
-        return jsonify({
-            "error": "ভিডিওর নাম লিখুন"
-        }), 400
-
-    video_name = None
-    thumb_name = None
+    conn = connect_db()
 
     try:
-        video_name = save_upload(
-            request.files.get("video"),
-            VIDEO_EXTS,
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {column} FROM live_store_videos WHERE id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+
+        return row[0] if row else None
+
+    finally:
+        conn.close()
+
+
+def get_telegram_file_path(file_id: str):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
+
+    result = requests.get(
+        url,
+        params={"file_id": file_id},
+        timeout=30,
+    )
+    result.raise_for_status()
+
+    payload = result.json()
+
+    if not payload.get("ok"):
+        raise RuntimeError("Telegram getFile request failed")
+
+    return payload["result"]["file_path"]
+
+
+def proxy_telegram_file(file_id: str, allow_range: bool):
+    try:
+        file_path = get_telegram_file_path(file_id)
+
+        file_url = (
+            f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
         )
-        thumb_name = save_upload(
-            request.files.get("thumbnail"),
-            IMAGE_EXTS,
+
+        headers = {}
+        if allow_range and request.headers.get("Range"):
+            headers["Range"] = request.headers["Range"]
+
+        upstream = requests.get(
+            file_url,
+            headers=headers,
+            stream=True,
+            timeout=(15, 120),
         )
 
-        conn = connect_db()
-        try:
-            with conn:
-                with conn.cursor(
-                    cursor_factory=RealDictCursor
-                ) as cur:
-                    cur.execute("""
-                        INSERT INTO live_store_videos
-                            (title, video_file, thumbnail_file)
-                        VALUES (%s, %s, %s)
-                        RETURNING id
-                    """, (
-                        title[:200],
-                        video_name,
-                        thumb_name,
-                    ))
-                    new_id = cur.fetchone()["id"]
-        finally:
-            conn.close()
+        if upstream.status_code not in (200, 206):
+            upstream.close()
+            return jsonify({"error": "Telegram media download failed"}), 502
 
-        return jsonify({
-            "ok": True,
-            "id": new_id,
-        }), 201
+        def generate():
+            try:
+                for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        yield chunk
+            finally:
+                upstream.close()
 
-    except ValueError as exc:
-        for name in [video_name, thumb_name]:
-            if name:
-                (UPLOAD_DIR / name).unlink(missing_ok=True)
+        response = Response(
+            stream_with_context(generate()),
+            status=upstream.status_code,
+            content_type=upstream.headers.get(
+                "Content-Type",
+                "video/mp4" if allow_range else "image/jpeg",
+            ),
+        )
 
-        return jsonify({"error": str(exc)}), 400
+        for header in (
+            "Content-Length",
+            "Content-Range",
+            "Accept-Ranges",
+        ):
+            if header in upstream.headers:
+                response.headers[header] = upstream.headers[header]
+
+        response.headers["Cache-Control"] = "public, max-age=300"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+        return response
 
     except Exception:
-        log.exception("Video upload failed")
-
-        for name in [video_name, thumb_name]:
-            if name:
-                (UPLOAD_DIR / name).unlink(missing_ok=True)
-
+        log.exception("Telegram media proxy failed")
         return jsonify({
             "error": (
-                "আপলোড হয়নি। Render Logs, ফাইলের ফরম্যাট, "
-                "UPLOAD_DIR ও DATABASE_URL পরীক্ষা করুন।"
+                "মিডিয়া লোড হয়নি। Telegram file size এবং Render Logs পরীক্ষা করুন।"
             )
-        }), 500
+        }), 502
 
 
-@app.put("/api/videos/<int:video_id>")
-@admin_only
-def rename_video(video_id):
-    data = request.get_json(silent=True) or {}
-    title = str(data.get("title", "")).strip()
+@app.get("/media/<int:video_id>")
+def play_video(video_id):
+    file_id = get_file_id(video_id, "video_file_id")
 
-    if not title:
-        return jsonify({
-            "error": "নতুন নাম লিখুন"
-        }), 400
+    if not file_id:
+        return jsonify({"error": "ভিডিও পাওয়া যায়নি"}), 404
 
-    conn = connect_db()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE live_store_videos
-                    SET title = %s
-                    WHERE id = %s
-                """, (title[:200], video_id))
-
-                if cur.rowcount == 0:
-                    return jsonify({
-                        "error": "ভিডিও পাওয়া যায়নি"
-                    }), 404
-
-        return jsonify({"ok": True})
-    finally:
-        conn.close()
+    return proxy_telegram_file(file_id, allow_range=True)
 
 
-@app.delete("/api/videos/<int:video_id>")
-@admin_only
-def delete_video(video_id):
-    conn = connect_db()
-    try:
-        with conn:
-            with conn.cursor(
-                cursor_factory=RealDictCursor
-            ) as cur:
-                cur.execute("""
-                    DELETE FROM live_store_videos
-                    WHERE id = %s
-                    RETURNING video_file, thumbnail_file
-                """, (video_id,))
+@app.get("/thumbnail/<int:video_id>")
+def get_thumbnail(video_id):
+    file_id = get_file_id(video_id, "thumbnail_file_id")
 
-                row = cur.fetchone()
+    if not file_id:
+        return jsonify({"error": "Thumbnail পাওয়া যায়নি"}), 404
 
-                if not row:
-                    return jsonify({
-                        "error": "ভিডিও পাওয়া যায়নি"
-                    }), 404
-
-                files = [
-                    row["video_file"],
-                    row["thumbnail_file"],
-                ]
-    finally:
-        conn.close()
-
-    for name in files:
-        if name:
-            (UPLOAD_DIR / name).unlink(missing_ok=True)
-
-    return jsonify({"ok": True})
+    return proxy_telegram_file(file_id, allow_range=False)
 
 
 @app.errorhandler(413)
-def file_too_large(_error):
-    return jsonify({
-        "error": "ফাইল ১০০ MB-এর বেশি। ছোট ফাইল দিন।"
-    }), 413
+def too_large(_error):
+    return jsonify({"error": "ফাইলের আকার অনুমোদিত সীমার বেশি।"}), 413
 
 
 # =========================
-# TELEGRAM MENU
-# =========================
-
-MENU = [
-    ["🎵 গান", "💃 নাচ"],
-    ["🎬 নাটক", "✍️ ক্যাপশন"],
-    ["🆘 সাহায্য", "👤 অ্যাডমিন যোগাযোগ"],
-]
-
-
-def make_web_buttons(user_id):
-    """
-    Open now: সব User-এর জন্য।
-    Admin Panel: শুধু নির্দিষ্ট Telegram ID-এর জন্য।
-    """
-
-    if not WEB_APP_URL:
-        return None
-
-    buttons = [
-        [
-            InlineKeyboardButton(
-                "▶ Open now",
-                url=WEB_APP_URL,
-            )
-        ]
-    ]
-
-    if (
-        ADMIN_TELEGRAM_ID
-        and str(user_id) == ADMIN_TELEGRAM_ID
-    ):
-        buttons.append([
-            InlineKeyboardButton(
-                "⚙️ Admin Panel",
-                url=WEB_APP_URL + "/admin",
-            )
-        ])
-
-    return InlineKeyboardMarkup(buttons)
-
-
-async def start(update, context):
-    user = update.effective_user
-
-    if not user or not update.message:
-        return
-
-    await update.message.reply_text(
-        "স্বাগতম Live Store Bot-এ! 🎬\n\n"
-        "ভিডিও দেখতে ▶ Open now চাপুন।",
-        reply_markup=make_web_buttons(user.id),
-    )
-
-    await update.message.reply_text(
-        "নিচের মেনু থেকে আপনার পছন্দ বেছে নিন।",
-        reply_markup=ReplyKeyboardMarkup(
-            MENU,
-            resize_keyboard=True,
-        ),
-    )
-
-
-async def help_command(update, context):
-    if not update.message:
-        return
-
-    await update.message.reply_text(
-        "মেনু থেকে গান, নাচ, নাটক, ক্যাপশন বা সাহায্য বেছে নিন।"
-    )
-
-
-async def auto_reply(update, context):
-    if not update.message or not update.message.text:
-        return
-
-    msg = update.message.text.lower()
-
-    if "গান" in msg:
-        answer = "🎵 গান বিভাগ"
-    elif "নাচ" in msg:
-        answer = "💃 নাচ বিভাগ"
-    elif "নাটক" in msg:
-        answer = "🎬 নাটক বিভাগ"
-    elif "ক্যাপশন" in msg:
-        answer = (
-            "✍️ ক্যাপশন:\n"
-            "সময় বদলায়, অভিজ্ঞতা মানুষকে বদলে দেয়।"
-        )
-    elif "সাহায্য" in msg:
-        answer = "🆘 সাহায্যের জন্য অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
-    elif "অ্যাডমিন" in msg or "যোগাযোগ" in msg:
-        answer = "অ্যাডমিন: @" + ADMIN_USERNAME.lstrip("@")
-    else:
-        answer = "মেসেজ পেয়েছি 😊 নিচের মেনু ব্যবহার করুন।"
-
-    await update.message.reply_text(
-        answer,
-        reply_markup=ReplyKeyboardMarkup(
-            MENU,
-            resize_keyboard=True,
-        ),
-    )
-
-
-# =========================
-# START WEB SERVER + BOT
+# RUN
 # =========================
 
 def run_web():
@@ -491,14 +710,26 @@ def main():
 
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(CommandHandler("help", help_command))
+    bot.add_handler(CommandHandler("upload", upload_command))
+    bot.add_handler(CommandHandler("cancel", cancel_command))
+    bot.add_handler(CommandHandler("videos", videos_command))
+    bot.add_handler(CommandHandler("skip", skip_description))
+
     bot.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            auto_reply,
+            filters.VIDEO | filters.PHOTO | filters.Document.ALL,
+            handle_media,
         )
     )
 
-    log.info("Live Store web server and Telegram bot starting")
+    bot.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_text,
+        )
+    )
+
+    log.info("Live Store bot and web app starting")
     bot.run_polling()
 
 
