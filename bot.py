@@ -1,737 +1,319 @@
-import os
-import asyncio
-import threading
-import logging
-
-import requests
-import psycopg2
+import os, asyncio, threading, logging
+from urllib.parse import quote
+import requests, psycopg2
 from psycopg2.extras import RealDictCursor
-
-from flask import (
-    Flask, request, jsonify, Response, stream_with_context
-)
-
-from telegram import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    WebAppInfo,
-    Update,
-)
-
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from flask import Flask, request, jsonify, send_from_directory, Response, abort
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("live-store")
+log = logging.getLogger('live-store')
+BASE = os.path.dirname(os.path.abspath(__file__))
+PUBLIC = os.path.join(BASE, 'public')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '').strip()
+DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
+ADMIN_RAW = os.getenv('ADMIN_TELEGRAM_ID', '').strip()
+WEB_APP_URL = os.getenv('WEB_APP_URL', '').strip().rstrip('/')
+ADSTERRA_URL = os.getenv('ADSTERRA_URL', '').strip()
+ADMIN_API_KEY = os.getenv('ADMIN_API_KEY', '').strip()
+PORT = int(os.getenv('PORT', '10000'))
+for key, value in [('BOT_TOKEN', BOT_TOKEN), ('DATABASE_URL', DATABASE_URL), ('WEB_APP_URL', WEB_APP_URL), ('ADMIN_API_KEY', ADMIN_API_KEY)]:
+    if not value: raise RuntimeError(f'{key} environment variable is required')
+if not ADMIN_RAW.isdigit(): raise RuntimeError('ADMIN_TELEGRAM_ID must be your numeric Telegram user ID')
+ADMIN_ID = int(ADMIN_RAW)
+app = Flask(__name__, static_folder=PUBLIC, static_url_path='')
+upload_state, admin_state = {}, {}
 
-# =========================
-# ENVIRONMENT VARIABLES
-# =========================
-
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
-WEB_APP_URL = os.getenv("WEB_APP_URL", "").strip().rstrip("/")
-ADSTERRA_URL = os.getenv("ADSTERRA_URL", "").strip()
-
-if not all([BOT_TOKEN, DATABASE_URL, ADMIN_TELEGRAM_ID, WEB_APP_URL]):
-    raise RuntimeError(
-        "Render Environment-এ BOT_TOKEN, DATABASE_URL, "
-        "ADMIN_TELEGRAM_ID এবং WEB_APP_URL দিতে হবে।"
-    )
-
-if not ADMIN_TELEGRAM_ID.isdigit():
-    raise RuntimeError("ADMIN_TELEGRAM_ID অবশ্যই সংখ্যার Telegram ID হতে হবে।")
-
-ADMIN_ID = int(ADMIN_TELEGRAM_ID)
-
-app = Flask(__name__, static_folder="public")
-
-# =========================
-# DATABASE
-# =========================
-
-def connect_db():
-    return psycopg2.connect(
-        DATABASE_URL,
-        connect_timeout=15,
-        sslmode="require",
-    )
-
-
+def db(): return psycopg2.connect(DATABASE_URL, sslmode='require', cursor_factory=RealDictCursor)
 def setup_db():
-    conn = connect_db()
-
+    conn=db()
     try:
         with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS live_store_videos (
-                        id SERIAL PRIMARY KEY,
-                        title TEXT NOT NULL,
-                        video_file TEXT NOT NULL DEFAULT '',
-                        thumbnail_file TEXT NOT NULL DEFAULT '',
-                        created_at TIMESTAMPTZ DEFAULT NOW()
-                    )
-                """)
+            with conn.cursor() as c:
+                c.execute('''CREATE TABLE IF NOT EXISTS categories(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,name VARCHAR(100) NOT NULL UNIQUE,thumbnail_url TEXT,thumbnail_file_id TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
+                c.execute('ALTER TABLE categories ADD COLUMN IF NOT EXISTS thumbnail_url TEXT')
+                c.execute('ALTER TABLE categories ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT')
+                c.execute('''CREATE TABLE IF NOT EXISTS videos(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,title VARCHAR(255) NOT NULL,description TEXT NOT NULL DEFAULT '',video_url TEXT,thumbnail_url TEXT,video_file_id TEXT,thumbnail_file_id TEXT,category_id BIGINT REFERENCES categories(id) ON DELETE SET NULL,is_active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
+                for col, typ in [('description',"TEXT NOT NULL DEFAULT ''"),('video_url','TEXT'),('thumbnail_url','TEXT'),('video_file_id','TEXT'),('thumbnail_file_id','TEXT'),('category_id','BIGINT REFERENCES categories(id) ON DELETE SET NULL'),('is_active','BOOLEAN NOT NULL DEFAULT TRUE'),('updated_at','TIMESTAMPTZ NOT NULL DEFAULT NOW()')]: c.execute(f'ALTER TABLE videos ADD COLUMN IF NOT EXISTS {col} {typ}')
+                c.execute('''CREATE TABLE IF NOT EXISTS ad_cards(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,title VARCHAR(255) NOT NULL,description TEXT NOT NULL DEFAULT '',thumbnail_url TEXT,target_url TEXT NOT NULL DEFAULT '',is_active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
+                c.execute('''CREATE TABLE IF NOT EXISTS app_settings(setting_key VARCHAR(100) PRIMARY KEY,setting_value TEXT NOT NULL DEFAULT '',updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
+                c.execute("INSERT INTO categories(name) VALUES('Music'),('Dance'),('Drama'),('Entertainment') ON CONFLICT(name) DO NOTHING")
+                c.execute("INSERT INTO app_settings(setting_key,setting_value) VALUES('app_name','Live Store'),('app_title','Live Store | Premium Video') ON CONFLICT(setting_key) DO NOTHING")
+    finally: conn.close()
 
-                cur.execute("""
-                    ALTER TABLE live_store_videos
-                    ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'অন্যান্য'
-                """)
+def is_admin(uid): return uid == ADMIN_ID
+def user_keyboard(admin=False):
+    rows=[[KeyboardButton('▶ Open now', web_app=WebAppInfo(url=WEB_APP_URL))],[KeyboardButton('/Start')]]
+    if admin: rows.append([KeyboardButton('/Admin')])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, persistent=True)
 
-                cur.execute("""
-                    ALTER TABLE live_store_videos
-                    ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''
-                """)
-
-                cur.execute("""
-                    ALTER TABLE live_store_videos
-                    ADD COLUMN IF NOT EXISTS video_file_id TEXT NOT NULL DEFAULT ''
-                """)
-
-                cur.execute("""
-                    ALTER TABLE live_store_videos
-                    ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT NOT NULL DEFAULT ''
-                """)
-
-    finally:
-        conn.close()
-
-
-def is_admin(update: Update) -> bool:
-    user = update.effective_user
-    return bool(user and user.id == ADMIN_ID)
-
-
-# =========================
-# TELEGRAM KEYBOARDS
-# =========================
-
-def make_menu(admin=False):
-    open_button = KeyboardButton(
-        "▶ Open now",
-        web_app=WebAppInfo(url=WEB_APP_URL),
-    )
-
-    if admin:
-        rows = [
-            [open_button],
-            [KeyboardButton("📤 ভিডিও আপলোড")],
-            [KeyboardButton("❌ আপলোড বাতিল")],
-            [KeyboardButton("🎬 ভিডিও তালিকা")],
-        ]
-    else:
-        rows = [
-            [open_button],
-            [KeyboardButton("🎵 গান"), KeyboardButton("💃 নাচ")],
-            [KeyboardButton("🎬 নাটক"), KeyboardButton("✍️ ক্যাপশন")],
-            [KeyboardButton("🆘 সাহায্য"), KeyboardButton("👤 অ্যাডমিন যোগাযোগ")],
-        ]
-
-    return ReplyKeyboardMarkup(
-        rows,
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
-# =========================
-# TELEGRAM COMMANDS
-# =========================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
-    context.user_data.pop("upload_step", None)
-    context.user_data.pop("upload_data", None)
-
-    if is_admin(update):
-        message = (
-            "🔐 Live Store Admin\n\n"
-            "ভিডিও আপলোড করতে 📤 ভিডিও আপলোড চাপুন।\n"
-            "ভিডিও দেখতে ▶ Open now চাপুন।"
-        )
-    else:
-        message = (
-            "🌌 স্বাগতম Live Store-এ!\n\n"
-            "ভিডিও দেখতে ▶ Open now চাপুন।"
-        )
-
-    await update.message.reply_text(
-        message,
-        reply_markup=make_menu(is_admin(update)),
-    )
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
-    if is_admin(update):
-        text = (
-            "Admin নির্দেশনা:\n"
-            "/upload - ভিডিও আপলোড\n"
-            "/cancel - আপলোড বাতিল\n"
-            "/videos - ভিডিও তালিকা"
-        )
-    else:
-        text = (
-            "Live Store ব্যবহার করতে ▶ Open now চাপুন।\n"
-            "সহায়তার জন্য অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
-        )
-
-    await update.message.reply_text(text)
-
-
-async def upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
-    if not is_admin(update):
-        await update.message.reply_text("⛔ এই সুবিধা শুধু Admin-এর জন্য।")
-        return
-
-    context.user_data["upload_step"] = "video"
-    context.user_data["upload_data"] = {}
-
-    await update.message.reply_text(
-        "📤 ভিডিও আপলোড শুরু হয়েছে।\n\n"
-        "এখন Telegram-এ ভিডিওটি পাঠাও।\n"
-        "ভিডিও ফাইল হিসেবে পাঠালেও হবে।"
-    )
-
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.pop("upload_step", None)
-    context.user_data.pop("upload_data", None)
-
-    if update.message:
-        await update.message.reply_text(
-            "আপলোড বাতিল করা হয়েছে।",
-            reply_markup=make_menu(is_admin(update)),
-        )
-
-
-async def videos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
-    if not is_admin(update):
-        await update.message.reply_text("⛔ শুধু Admin এই তালিকা দেখতে পারবে।")
-        return
-
-    conn = connect_db()
+async def send_categories(update, context):
+    conn=db()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, title, category
-                FROM live_store_videos
-                ORDER BY id DESC
-                LIMIT 30
-            """)
-            rows = cur.fetchall()
-    finally:
-        conn.close()
+        with conn.cursor() as c:
+            c.execute('''SELECT c.name, COALESCE(c.thumbnail_file_id,(SELECT v.thumbnail_file_id FROM videos v WHERE v.category_id=c.id AND v.thumbnail_file_id IS NOT NULL ORDER BY v.id DESC LIMIT 1)) AS photo FROM categories c ORDER BY c.name''')
+            rows=c.fetchall()
+    finally: conn.close()
+    for row in rows:
+        url=f"{WEB_APP_URL}/?category={quote(row['name'])}"
+        markup=InlineKeyboardMarkup([[InlineKeyboardButton('▶ Open category', web_app=WebAppInfo(url=url))]])
+        caption=f"📂 {row['name']}\nএই ক্যাটাগরির ভিডিও দেখতে চাপুন।"
+        try:
+            if row.get('photo'): await context.bot.send_photo(update.effective_chat.id, row['photo'], caption=caption, reply_markup=markup)
+            else: await context.effective_message.reply_text(caption, reply_markup=markup)
+        except Exception: await context.effective_message.reply_text(caption, reply_markup=markup)
 
-    if not rows:
-        await update.message.reply_text("এখনো কোনো ভিডিও আপলোড করা হয়নি।")
-        return
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin=is_admin(update.effective_user.id)
+    await update.effective_message.reply_text('👑 Live Store Admin ready.' if admin else '🎬 Welcome to Live Store!\nনিচের বাটন থেকে ভিডিও দেখুন।', reply_markup=user_keyboard(admin))
+    if not admin: await send_categories(update, context)
 
-    lines = ["🎬 সর্বশেষ ভিডিওগুলো:"]
-    for video_id, title, category in rows:
-        lines.append(f"#{video_id} — {title} [{category}]")
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.effective_message.reply_text('⛔ এই কমান্ডটি শুধু অ্যাডমিনের জন্য।'); return
+    keys=[[KeyboardButton('▶ Open now',web_app=WebAppInfo(url=WEB_APP_URL))],[KeyboardButton('📤 ভিডিও আপলোড'),KeyboardButton('➕ ক্যাটাগরি')],[KeyboardButton('➕ বিজ্ঞাপন'),KeyboardButton('🎬 ভিডিও তালিকা')],[KeyboardButton('🗑 ভিডিও মুছুন'),KeyboardButton('❌ বাতিল')],[KeyboardButton('/Start'),KeyboardButton('/Admin')]]
+    await update.effective_message.reply_text('🔐 Live Store Admin\nভিডিও আপলোড: ভিডিও → thumbnail → নাম → category → description (/skip)।',reply_markup=ReplyKeyboardMarkup(keys,resize_keyboard=True,persistent=True))
 
-    await update.message.reply_text("\n".join(lines))
+async def cancel_cmd(update, context):
+    uid=update.effective_user.id; upload_state.pop(uid,None); admin_state.pop(uid,None)
+    await update.effective_message.reply_text('কাজ বাতিল হয়েছে।',reply_markup=user_keyboard(is_admin(uid)))
 
+async def videos_cmd(update, context):
+    if not is_admin(update.effective_user.id): await update.effective_message.reply_text('শুধু অ্যাডমিন ব্যবহার করতে পারবেন।'); return
+    conn=db()
+    try:
+        with conn.cursor() as c: c.execute('SELECT v.id,v.title,c.name AS category FROM videos v LEFT JOIN categories c ON c.id=v.category_id WHERE v.is_active=TRUE ORDER BY v.id DESC LIMIT 40'); rows=c.fetchall()
+    finally: conn.close()
+    await update.effective_message.reply_text('🎬 ভিডিও তালিকা\n'+'\n'.join(f"#{r['id']} — {r['title']} ({r.get('category') or 'Other'})" for r in rows) if rows else 'কোনো ভিডিও নেই।')
 
-# =========================
-# ADMIN VIDEO UPLOAD FLOW
-# =========================
-
-async def handle_media(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    if not update.message:
-        return
-
-    if not is_admin(update):
-        await update.message.reply_text("⛔ ভিডিও আপলোডের অনুমতি নেই।")
-        return
-
-    step = context.user_data.get("upload_step")
-    data = context.user_data.setdefault("upload_data", {})
-
-    if step == "video":
-        message = update.message
-
-        if message.video:
-            data["video_file_id"] = message.video.file_id
-
-        elif (
-            message.document
-            and (message.document.mime_type or "").startswith("video/")
-        ):
-            data["video_file_id"] = message.document.file_id
-
-        else:
-            await message.reply_text(
-                "একটি ভিডিও পাঠাও। MP4 ভিডিও হলে ভালো।"
-            )
-            return
-
-        context.user_data["upload_step"] = "thumbnail"
-
-        await message.reply_text(
-            "✅ ভিডিও পেয়েছি।\n\n"
-            "এখন ভিডিওটির Thumbnail ছবি পাঠাও।\n"
-            "Gallery থেকে ছবি বেছে পাঠাতে পারো।"
-        )
-        return
-
-    if step == "thumbnail":
-        message = update.message
-
-        if message.photo:
-            data["thumbnail_file_id"] = message.photo[-1].file_id
-
-        elif (
-            message.document
-            and (message.document.mime_type or "").startswith("image/")
-        ):
-            data["thumbnail_file_id"] = message.document.file_id
-
-        else:
-            await message.reply_text(
-                "একটি ছবি পাঠাও। JPG বা PNG ব্যবহার করো।"
-            )
-            return
-
-        context.user_data["upload_step"] = "title"
-
-        await message.reply_text("📝 এখন ভিডিওর নাম লেখো।")
-        return
-
-    await update.message.reply_text(
-        "আগে 📤 ভিডিও আপলোড বাটনে চাপো।",
-        reply_markup=make_menu(True),
-    )
-
-
-async def handle_text(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    if not update.message or not update.message.text:
-        return
-
-    message = update.message
-    text = message.text.strip()
-    lower = text.lower()
-
-    if text == "❌ আপলোড বাতিল":
-        await cancel_command(update, context)
-        return
-
-    if text == "📤 ভিডিও আপলোড":
-        await upload_command(update, context)
-        return
-
-    if text == "🎬 ভিডিও তালিকা":
-        await videos_command(update, context)
-        return
-
-    # Upload workflow
-    step = context.user_data.get("upload_step")
-
-    if step:
-        if not is_admin(update):
-            context.user_data.pop("upload_step", None)
-            context.user_data.pop("upload_data", None)
-            await message.reply_text("⛔ অনুমতি নেই।")
-            return
-
-        data = context.user_data.setdefault("upload_data", {})
-
-        if step == "title":
-            if len(text) < 1:
-                await message.reply_text("ভিডিওর নাম লিখো।")
-                return
-
-            data["title"] = text[:200]
-            context.user_data["upload_step"] = "category"
-
-            await message.reply_text(
-                "📂 Category লেখো।\n"
-                "উদাহরণ: নাটক, গান, নাচ, কমেডি"
-            )
-            return
-
-        if step == "category":
-            data["category"] = text[:80]
-            context.user_data["upload_step"] = "description"
-
-            await message.reply_text(
-                "📝 ভিডিওর Description লেখো।\n"
-                "না দিতে চাইলে /skip পাঠাও।"
-            )
-            return
-
-        if step == "description":
-            await save_video_record(
-                update,
-                context,
-                description=text,
-            )
-            return
-
-    # Normal user/admin menu replies
-    if "গান" in lower:
-        answer = "🎵 গান বিভাগ"
-    elif "নাচ" in lower:
-        answer = "💃 নাচ বিভাগ"
-    elif "নাটক" in lower:
-        answer = "🎬 নাটক বিভাগ"
-    elif "ক্যাপশন" in lower:
-        answer = "✍️ সময় বদলায়, অভিজ্ঞতা মানুষকে বদলে দেয়।"
-    elif "সাহায্য" in lower:
-        answer = "🆘 সাহায্যের জন্য অ্যাডমিনের সঙ্গে যোগাযোগ করুন।"
-    elif "অ্যাডমিন" in lower or "যোগাযোগ" in lower:
-        answer = "অ্যাডমিনের সঙ্গে যোগাযোগ করতে বটের মালিকের দেওয়া তথ্য ব্যবহার করুন।"
-    else:
-        answer = "Live Store ব্যবহার করতে ▶ Open now চাপুন।"
-
-    await message.reply_text(
-        answer,
-        reply_markup=make_menu(is_admin(update)),
-    )
-
-
-async def skip_description(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    if not update.message:
-        return
-
-    if not is_admin(update):
-        await update.message.reply_text("⛔ অনুমতি নেই।")
-        return
-
-    if context.user_data.get("upload_step") != "description":
-        await update.message.reply_text("এখন Description দেওয়ার ধাপ নয়।")
-        return
-
-    await save_video_record(update, context, description="")
-
-
-async def save_video_record(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    description: str,
-):
-    if not update.message:
-        return
-
-    data = context.user_data.get("upload_data", {})
-
-    required = [
-        "video_file_id",
-        "thumbnail_file_id",
-        "title",
-        "category",
-    ]
-
-    if not all(data.get(key) for key in required):
-        await update.message.reply_text(
-            "কিছু তথ্য পাওয়া যায়নি। /upload দিয়ে আবার শুরু করো।"
-        )
-        context.user_data.pop("upload_step", None)
-        context.user_data.pop("upload_data", None)
-        return
-
-    conn = connect_db()
-
+async def save_video(update,state,description):
+    conn=db()
     try:
         with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO live_store_videos
-                        (
-                            title,
-                            category,
-                            description,
-                            video_file_id,
-                            thumbnail_file_id,
-                            video_file,
-                            thumbnail_file
-                        )
-                    VALUES (%s, %s, %s, %s, %s, '', '')
-                    RETURNING id
-                """, (
-                    data["title"],
-                    data["category"],
-                    description[:2000],
-                    data["video_file_id"],
-                    data["thumbnail_file_id"],
-                ))
+            with conn.cursor() as c:
+                c.execute('INSERT INTO categories(name) VALUES(%s) ON CONFLICT(name) DO NOTHING',(state['category'],))
+                c.execute('SELECT id,thumbnail_file_id FROM categories WHERE name=%s',(state['category'],)); cat=c.fetchone()
+                c.execute('INSERT INTO videos(title,description,category_id,video_file_id,thumbnail_file_id,is_active) VALUES(%s,%s,%s,%s,%s,TRUE)',(state['title'],description,cat['id'],state['video_file_id'],state['thumbnail_file_id']))
+                if state.get('thumbnail_file_id') and not cat.get('thumbnail_file_id'): c.execute('UPDATE categories SET thumbnail_file_id=%s WHERE id=%s',(state['thumbnail_file_id'],cat['id']))
+    finally: conn.close()
+    await update.effective_message.reply_text('✅ ভিডিও Live Store-এ সেভ হয়েছে।')
 
-                new_id = cur.fetchone()[0]
+async def handle_media(update,context):
+    uid=update.effective_user.id
+    if not is_admin(uid): return
+    msg=update.effective_message; state=upload_state.get(uid); ast=admin_state.get(uid)
+    if state:
+        if state['step']=='video':
+            if msg.video: state['video_file_id']=msg.video.file_id
+            elif msg.document and (msg.document.mime_type or '').startswith('video/'): state['video_file_id']=msg.document.file_id
+            else: await msg.reply_text('ভিডিও ফাইল পাঠাও।'); return
+            state['step']='thumbnail'; await msg.reply_text('এখন thumbnail ছবি পাঠাও।'); return
+        if state['step']=='thumbnail':
+            if not msg.photo: await msg.reply_text('Thumbnail হিসেবে ছবি পাঠাও।'); return
+            state['thumbnail_file_id']=msg.photo[-1].file_id; state['step']='title'; await msg.reply_text('ভিডিওর নাম পাঠাও।'); return
+    if ast and ast.get('step') in ('category_photo','ad_photo'):
+        if not msg.photo: await msg.reply_text('একটি ছবি পাঠাও।'); return
+        fid=msg.photo[-1].file_id; url=f'{WEB_APP_URL}/telegram-photo/{quote(fid,safe="")}'
+        conn=db()
+        try:
+            with conn:
+                with conn.cursor() as c:
+                    if ast['step']=='category_photo':
+                        c.execute('INSERT INTO categories(name,thumbnail_url,thumbnail_file_id) VALUES(%s,%s,%s) ON CONFLICT(name) DO UPDATE SET thumbnail_url=EXCLUDED.thumbnail_url,thumbnail_file_id=EXCLUDED.thumbnail_file_id',(ast['name'],url,fid))
+                    else:
+                        ast['thumbnail_url']=url; ast['step']='ad_title'
+        finally: conn.close()
+        if ast['step']=='category_photo': admin_state.pop(uid,None); await msg.reply_text('✅ ক্যাটাগরি thumbnail-সহ সেভ হয়েছে।')
+        else: await msg.reply_text('বিজ্ঞাপনের শিরোনাম পাঠাও।')
 
-    except Exception:
-        log.exception("Failed to save uploaded video")
-        await update.message.reply_text(
-            "❌ ভিডিও সংরক্ষণ করা যায়নি। Render Logs পরীক্ষা করো।"
-        )
+async def handle_text(update,context):
+    uid=update.effective_user.id; text=(update.effective_message.text or '').strip(); admin=is_admin(uid)
+    if text.lower() in ('/start','🚀 start'): await start_cmd(update,context); return
+    if text.lower() in ('/admin','🔐 admin'): await admin_cmd(update,context); return
+    if text in ('❌ বাতিল','/cancel','❌ আপলোড বাতিল'): await cancel_cmd(update,context); return
+    if text=='/skip':
+        st=upload_state.get(uid)
+        if admin and st and st.get('step')=='description': await save_video(update,st,''); upload_state.pop(uid,None)
         return
-
-    finally:
-        conn.close()
-
-    context.user_data.pop("upload_step", None)
-    context.user_data.pop("upload_data", None)
-
-    await update.message.reply_text(
-        f"✅ ভিডিও সফলভাবে যোগ হয়েছে!\n"
-        f"ID: {new_id}\n"
-        f"নাম: {data['title']}\n"
-        f"Category: {data['category']}\n\n"
-        "User-রা Live Store Web App-এ ভিডিওটি দেখতে পারবে।",
-        reply_markup=make_menu(True),
-    )
-
-
-# =========================
-# PUBLIC VIDEO API
-# =========================
-
-@app.get("/")
-def home():
-    return app.send_static_file("index.html")
-
-
-@app.get("/health")
-def health():
-    return "Live Store is running", 200
-
-
-@app.get("/api/config")
-def public_config():
-    return jsonify({
-        "name": "Live Store",
-        "ad_url": ADSTERRA_URL,
-    })
-
-
-@app.get("/api/videos")
-def list_videos():
-    conn = connect_db()
-
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT
-                    id, title, category, description, created_at
-                FROM live_store_videos
-                WHERE video_file_id <> ''
-                  AND thumbnail_file_id <> ''
-                ORDER BY id DESC
-            """)
-            rows = [dict(row) for row in cur.fetchall()]
-
-        for row in rows:
-            row["video_url"] = f"/media/{row['id']}"
-            row["thumbnail_url"] = f"/thumbnail/{row['id']}"
-            row["created_at"] = str(row["created_at"])
-
-        return jsonify(rows)
-
-    finally:
-        conn.close()
-
-
-def get_file_id(video_id: int, column: str):
-    allowed = {"video_file_id", "thumbnail_file_id"}
-
-    if column not in allowed:
-        return None
-
-    conn = connect_db()
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT {column} FROM live_store_videos WHERE id = %s",
-                (video_id,),
-            )
-            row = cur.fetchone()
-
-        return row[0] if row else None
-
-    finally:
-        conn.close()
-
-
-def get_telegram_file_path(file_id: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
-
-    result = requests.get(
-        url,
-        params={"file_id": file_id},
-        timeout=30,
-    )
-    result.raise_for_status()
-
-    payload = result.json()
-
-    if not payload.get("ok"):
-        raise RuntimeError("Telegram getFile request failed")
-
-    return payload["result"]["file_path"]
-
-
-def proxy_telegram_file(file_id: str, allow_range: bool):
-    try:
-        file_path = get_telegram_file_path(file_id)
-
-        file_url = (
-            f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-        )
-
-        headers = {}
-        if allow_range and request.headers.get("Range"):
-            headers["Range"] = request.headers["Range"]
-
-        upstream = requests.get(
-            file_url,
-            headers=headers,
-            stream=True,
-            timeout=(15, 120),
-        )
-
-        if upstream.status_code not in (200, 206):
-            upstream.close()
-            return jsonify({"error": "Telegram media download failed"}), 502
-
-        def generate():
+    if not admin: return
+    if text=='📤 ভিডিও আপলোড': upload_state[uid]={'step':'video'}; await update.effective_message.reply_text('প্রথমে ভিডিও ফাইল পাঠাও।'); return
+    if text=='🎬 ভিডিও তালিকা': await videos_cmd(update,context); return
+    if text=='➕ ক্যাটাগরি': admin_state[uid]={'step':'category_name'}; await update.effective_message.reply_text('ক্যাটাগরির নাম পাঠাও।'); return
+    if text=='➕ বিজ্ঞাপন': admin_state[uid]={'step':'ad_photo'}; await update.effective_message.reply_text('বিজ্ঞাপনের thumbnail ছবি পাঠাও।'); return
+    if text=='🗑 ভিডিও মুছুন': admin_state[uid]={'step':'delete_video'}; await update.effective_message.reply_text('/videos দিয়ে ID দেখে ভিডিও ID পাঠাও।'); return
+    st=upload_state.get(uid)
+    if st:
+        if st['step']=='title': st['title']=text[:255]; st['step']='category'; await update.effective_message.reply_text('ক্যাটাগরির নাম পাঠাও (Drama/Music/Dance)।'); return
+        if st['step']=='category': st['category']=text[:100]; st['step']='description'; await update.effective_message.reply_text('Description পাঠাও, অথবা /skip।'); return
+        if st['step']=='description': await save_video(update,st,text); upload_state.pop(uid,None); return
+    ast=admin_state.get(uid)
+    if ast:
+        if ast['step']=='category_name': ast['name']=text[:100]; ast['step']='category_photo'; await update.effective_message.reply_text('ক্যাটাগরির thumbnail ছবি পাঠাও।'); return
+        if ast['step']=='ad_title': ast['title']=text[:255]; ast['step']='ad_description'; await update.effective_message.reply_text('বিজ্ঞাপনের description পাঠাও।'); return
+        if ast['step']=='ad_description': ast['description']=text; ast['step']='ad_url'; await update.effective_message.reply_text('বিজ্ঞাপনের target URL পাঠাও, অথবা /skip দিলে ADSTERRA_URL ব্যবহার হবে।'); return
+        if ast['step']=='ad_url':
+            target=ADSTERRA_URL if text=='/skip' else text
+            if not target.startswith(('https://','http://')): await update.effective_message.reply_text('সঠিক http/https URL পাঠাও।'); return
+            conn=db()
             try:
-                for chunk in upstream.iter_content(chunk_size=64 * 1024):
-                    if chunk:
-                        yield chunk
-            finally:
-                upstream.close()
+                with conn:
+                    with conn.cursor() as c: c.execute('INSERT INTO ad_cards(title,description,thumbnail_url,target_url) VALUES(%s,%s,%s,%s)',(ast['title'],ast.get('description',''),ast.get('thumbnail_url'),target))
+            finally: conn.close()
+            admin_state.pop(uid,None); await update.effective_message.reply_text('✅ বিজ্ঞাপনের কার্ড সেভ হয়েছে।'); return
+        if ast['step']=='delete_video':
+            if not text.isdigit(): await update.effective_message.reply_text('সংখ্যাসূচক ভিডিও ID পাঠাও।'); return
+            conn=db()
+            try:
+                with conn:
+                    with conn.cursor() as c: c.execute('UPDATE videos SET is_active=FALSE,updated_at=NOW() WHERE id=%s',(int(text),)); n=c.rowcount
+            finally: conn.close()
+            admin_state.pop(uid,None); await update.effective_message.reply_text('✅ ভিডিও মুছে দেওয়া হয়েছে।' if n else 'ভিডিও ID পাওয়া যায়নি।'); return
 
-        response = Response(
-            stream_with_context(generate()),
-            status=upstream.status_code,
-            content_type=upstream.headers.get(
-                "Content-Type",
-                "video/mp4" if allow_range else "image/jpeg",
-            ),
-        )
+@app.get('/')
+def home(): return send_from_directory(PUBLIC,'index.html')
+@app.get('/admin')
+def admin_page(): return send_from_directory(BASE,'admin.html')
+@app.get('/health')
+def health(): return jsonify(ok=True,app='Live Store')
+@app.get('/api/config')
+def config(): return jsonify(name='Live Store',title='Live Store | Premium Video',ad_url=ADSTERRA_URL)
 
-        for header in (
-            "Content-Length",
-            "Content-Range",
-            "Accept-Ranges",
-        ):
-            if header in upstream.headers:
-                response.headers[header] = upstream.headers[header]
+def tg_path(fid):
+    r=requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/getFile',params={'file_id':fid},timeout=20); r.raise_for_status(); data=r.json()
+    if not data.get('ok'): raise RuntimeError('Telegram file lookup failed')
+    return data['result']['file_path']
+def proxy_file(fid,ctype):
+    path=tg_path(fid); r=requests.get(f'https://api.telegram.org/file/bot{BOT_TOKEN}/{path}',stream=True,timeout=60); r.raise_for_status()
+    return Response(r.iter_content(128*1024),content_type=r.headers.get('Content-Type',ctype))
+@app.get('/telegram-photo/<path:fid>')
+def telegram_photo(fid):
+    try: return proxy_file(fid,'image/jpeg')
+    except Exception: abort(404)
+@app.get('/media/<int:vid>')
+def media(vid):
+    conn=db()
+    try:
+        with conn.cursor() as c: c.execute('SELECT video_url,video_file_id FROM videos WHERE id=%s AND is_active=TRUE',(vid,)); r=c.fetchone()
+    finally: conn.close()
+    if not r: abort(404)
+    if r.get('video_url'): return Response(status=302,headers={'Location':r['video_url']})
+    if not r.get('video_file_id'): abort(404)
+    try: return proxy_file(r['video_file_id'],'video/mp4')
+    except Exception: abort(502)
+@app.get('/thumbnail/<int:vid>')
+def thumbnail(vid):
+    conn=db()
+    try:
+        with conn.cursor() as c: c.execute('SELECT thumbnail_url,thumbnail_file_id FROM videos WHERE id=%s AND is_active=TRUE',(vid,)); r=c.fetchone()
+    finally: conn.close()
+    if not r: abort(404)
+    if r.get('thumbnail_url'): return Response(status=302,headers={'Location':r['thumbnail_url']})
+    if not r.get('thumbnail_file_id'): abort(404)
+    try: return proxy_file(r['thumbnail_file_id'],'image/jpeg')
+    except Exception: abort(502)
+@app.get('/api/videos')
+def api_videos():
+    category=(request.args.get('category') or '').strip(); conn=db()
+    try:
+        with conn.cursor() as c:
+            q='SELECT v.id,v.title,v.description,v.video_url,v.thumbnail_url,v.video_file_id,v.thumbnail_file_id,c.name AS category,v.created_at FROM videos v LEFT JOIN categories c ON c.id=v.category_id WHERE v.is_active=TRUE'; params=[]
+            if category: q+=' AND LOWER(c.name)=LOWER(%s)'; params.append(category)
+            q+=' ORDER BY v.created_at DESC'; c.execute(q,params); rows=c.fetchall()
+    finally: conn.close()
+    return jsonify([{'id':r['id'],'title':r['title'],'description':r['description'] or '', 'category':r['category'] or 'Other','video_url':r['video_url'] or f"/media/{r['id']}",'thumbnail_url':r['thumbnail_url'] or f"/thumbnail/{r['id']}"} for r in rows])
+@app.get('/api/categories')
+def api_categories():
+    conn=db()
+    try:
+        with conn.cursor() as c:
+            c.execute('''SELECT c.id,c.name,COALESCE(c.thumbnail_url,(SELECT v.thumbnail_url FROM videos v WHERE v.category_id=c.id AND v.is_active=TRUE AND v.thumbnail_url IS NOT NULL ORDER BY v.id DESC LIMIT 1)) AS image_url,(SELECT COUNT(*) FROM videos v WHERE v.category_id=c.id AND v.is_active=TRUE) AS video_count FROM categories c ORDER BY c.name'''); rows=c.fetchall()
+    finally: conn.close()
+    return jsonify([dict(r) for r in rows])
+@app.get('/api/ads')
+def api_ads():
+    conn=db()
+    try:
+        with conn.cursor() as c: c.execute('SELECT id,title,description,thumbnail_url,target_url FROM ad_cards WHERE is_active=TRUE ORDER BY id DESC'); rows=c.fetchall()
+    finally: conn.close()
+    return jsonify(rows)
+def authorized(): return bool(ADMIN_API_KEY and request.headers.get('X-Admin-Key')==ADMIN_API_KEY)
+@app.post('/api/admin/login')
+def admin_login():
+    d=request.get_json(silent=True) or {}
+    if not ADMIN_API_KEY or d.get('password')!=ADMIN_API_KEY: return jsonify(error='Invalid admin password'),401
+    return jsonify(logged_in=True,token=ADMIN_API_KEY)
+@app.get('/api/admin/session')
+def admin_session():
+    if not authorized(): return jsonify(logged_in=False),401
+    return jsonify(logged_in=True)
+@app.post('/api/videos')
+def create_video():
+    if not authorized(): return jsonify(error='Unauthorized'),401
+    d=request.get_json(silent=True) or {}; title=(d.get('title') or '').strip(); url=(d.get('video_url') or d.get('url') or '').strip(); category=(d.get('category') or 'Entertainment').strip()[:100]
+    if not title or not url.startswith(('http://','https://')): return jsonify(error='Title and valid video URL required'),400
+    conn=db()
+    try:
+        with conn:
+            with conn.cursor() as c:
+                c.execute('INSERT INTO categories(name) VALUES(%s) ON CONFLICT(name) DO NOTHING',(category,)); c.execute('SELECT id FROM categories WHERE name=%s',(category,)); cid=c.fetchone()['id']
+                c.execute('INSERT INTO videos(title,description,video_url,thumbnail_url,category_id) VALUES(%s,%s,%s,%s,%s) RETURNING id',(title[:255],(d.get('description') or '').strip(),url,(d.get('thumbnail_url') or '').strip() or None,cid)); vid=c.fetchone()['id']
+    finally: conn.close()
+    return jsonify(success=True,id=vid),201
+@app.put('/api/videos/<int:vid>')
+def update_video(vid):
+    if not authorized(): return jsonify(error='Unauthorized'),401
+    title=((request.get_json(silent=True) or {}).get('title') or '').strip()
+    if not title: return jsonify(error='Title required'),400
+    conn=db()
+    try:
+        with conn:
+            with conn.cursor() as c: c.execute('UPDATE videos SET title=%s,updated_at=NOW() WHERE id=%s AND is_active=TRUE',(title[:255],vid)); n=c.rowcount
+    finally: conn.close()
+    return (jsonify(success=True) if n else (jsonify(error='Not found'),404))
+@app.delete('/api/videos/<int:vid>')
+def delete_video(vid):
+    if not authorized(): return jsonify(error='Unauthorized'),401
+    conn=db()
+    try:
+        with conn:
+            with conn.cursor() as c: c.execute('UPDATE videos SET is_active=FALSE,updated_at=NOW() WHERE id=%s',(vid,)); n=c.rowcount
+    finally: conn.close()
+    return (jsonify(success=True) if n else (jsonify(error='Not found'),404))
+@app.post('/api/ads')
+def create_ad():
+    if not authorized(): return jsonify(error='Unauthorized'),401
+    d=request.get_json(silent=True) or {}; title=(d.get('title') or '').strip(); target=(d.get('target_url') or ADSTERRA_URL).strip()
+    if not title or not target.startswith(('http://','https://')): return jsonify(error='Title and valid target URL required'),400
+    conn=db()
+    try:
+        with conn:
+            with conn.cursor() as c: c.execute('INSERT INTO ad_cards(title,description,thumbnail_url,target_url) VALUES(%s,%s,%s,%s) RETURNING id',(title[:255],(d.get('description') or '').strip(),(d.get('thumbnail_url') or '').strip() or None,target)); aid=c.fetchone()['id']
+    finally: conn.close()
+    return jsonify(success=True,id=aid),201
+@app.delete('/api/ads/<int:aid>')
+def delete_ad(aid):
+    if not authorized(): return jsonify(error='Unauthorized'),401
+    conn=db()
+    try:
+        with conn:
+            with conn.cursor() as c: c.execute('UPDATE ad_cards SET is_active=FALSE WHERE id=%s',(aid,)); n=c.rowcount
+    finally: conn.close()
+    return (jsonify(success=True) if n else (jsonify(error='Not found'),404))
 
-        response.headers["Cache-Control"] = "public, max-age=300"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-
-        return response
-
-    except Exception:
-        log.exception("Telegram media proxy failed")
-        return jsonify({
-            "error": (
-                "মিডিয়া লোড হয়নি। Telegram file size এবং Render Logs পরীক্ষা করুন।"
-            )
-        }), 502
-
-
-@app.get("/media/<int:video_id>")
-def play_video(video_id):
-    file_id = get_file_id(video_id, "video_file_id")
-
-    if not file_id:
-        return jsonify({"error": "ভিডিও পাওয়া যায়নি"}), 404
-
-    return proxy_telegram_file(file_id, allow_range=True)
-
-
-@app.get("/thumbnail/<int:video_id>")
-def get_thumbnail(video_id):
-    file_id = get_file_id(video_id, "thumbnail_file_id")
-
-    if not file_id:
-        return jsonify({"error": "Thumbnail পাওয়া যায়নি"}), 404
-
-    return proxy_telegram_file(file_id, allow_range=False)
-
-
-@app.errorhandler(413)
-def too_large(_error):
-    return jsonify({"error": "ফাইলের আকার অনুমোদিত সীমার বেশি।"}), 413
-
-
-# =========================
-# RUN
-# =========================
-
-def run_web():
-    port = int(os.getenv("PORT", "10000"))
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-        use_reloader=False,
-    )
-
-
-def main():
+async def skip_cmd(update,context):
+    uid=update.effective_user.id; st=upload_state.get(uid)
+    if is_admin(uid) and st and st.get('step')=='description': await save_video(update,st,''); upload_state.pop(uid,None)
+    else: await update.effective_message.reply_text('এখন skip করার কিছু নেই।')
+def bot_thread():
+    async def runner():
+        bot=Application.builder().token(BOT_TOKEN).build()
+        bot.add_handler(CommandHandler('start',start_cmd)); bot.add_handler(CommandHandler('admin',admin_cmd)); bot.add_handler(CommandHandler('videos',videos_cmd)); bot.add_handler(CommandHandler('cancel',cancel_cmd)); bot.add_handler(CommandHandler('skip',skip_cmd))
+        bot.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL,handle_media))
+        bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text))
+        await bot.initialize(); await bot.start(); await bot.updater.start_polling(drop_pending_updates=True)
+        while True: await asyncio.sleep(3600)
+    asyncio.run(runner())
+if __name__=='__main__':
     setup_db()
-
-    threading.Thread(
-        target=run_web,
-        daemon=True,
-    ).start()
-
-    bot = Application.builder().token(BOT_TOKEN).build()
-
-    bot.add_handler(CommandHandler("start", start))
-    bot.add_handler(CommandHandler("help", help_command))
-    bot.add_handler(CommandHandler("upload", upload_command))
-    bot.add_handler(CommandHandler("cancel", cancel_command))
-    bot.add_handler(CommandHandler("videos", videos_command))
-    bot.add_handler(CommandHandler("skip", skip_description))
-
-    bot.add_handler(
-        MessageHandler(
-            filters.VIDEO | filters.PHOTO | filters.Document.ALL,
-            handle_media,
-        )
-    )
-
-    bot.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_text,
-        )
-    )
-
-    log.info("Live Store bot and web app starting")
-    bot.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+    threading.Thread(target=bot_thread,daemon=True,name='telegram-bot').start()
+    app.run(host='0.0.0.0',port=PORT,debug=False,use_reloader=False)
