@@ -162,15 +162,18 @@ async def init_db():
                 "🎥 মুভি",
             ]
 
+            # Avoid ON CONFLICT so old schemas without a UNIQUE
+            # constraint can still initialize.
             for name in defaults:
-                await conn.execute(
-                    """
-                    INSERT INTO categories(name)
-                    VALUES($1)
-                    ON CONFLICT(name) DO NOTHING
-                    """,
+                exists = await conn.fetchval(
+                    "SELECT id FROM categories WHERE name=$1 LIMIT 1",
                     name,
                 )
+                if not exists:
+                    await conn.execute(
+                        "INSERT INTO categories(name) VALUES($1)",
+                        name,
+                    )
 
         logger.info("Database initialized successfully.")
 
@@ -183,6 +186,7 @@ def is_admin(user_id):
 
 
 async def save_contact(user):
+    """Save/update contacts without relying on ON CONFLICT."""
     if not user:
         return
 
@@ -190,12 +194,13 @@ async def save_contact(user):
 
     try:
         async with pool.acquire() as conn:
-            existing = await conn.fetchval(
+            existing_ids = await conn.fetch(
                 "SELECT id FROM contacts WHERE user_id=$1",
                 user.id,
             )
 
-            if existing:
+            if existing_ids:
+                # Update all existing matching records. No rows are deleted.
                 await conn.execute(
                     """
                     UPDATE contacts
@@ -211,9 +216,6 @@ async def save_contact(user):
                     """
                     INSERT INTO contacts(user_id, username, first_name)
                     VALUES($1, $2, $3)
-                    ON CONFLICT(user_id) DO UPDATE SET
-                        username=EXCLUDED.username,
-                        first_name=EXCLUDED.first_name
                     """,
                     user.id,
                     user.username,
@@ -224,7 +226,7 @@ async def save_contact(user):
 
 
 # =====================================================
-# KEYBOARDS
+# KEYBOARDS - KEEPING THE EXISTING OPEN VIDEO MENU
 # =====================================================
 
 def main_keyboard():
@@ -340,7 +342,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.user_data.clear()
-    await save_contact(user)
+
+    try:
+        await save_contact(user)
+    except Exception:
+        logger.exception("Could not save contact")
+        await message.reply_text(
+            "⚠️ ডাটাবেসে User তথ্য সংরক্ষণ করা যায়নি। "
+            "কিছুক্ষণ পরে আবার চেষ্টা করুন।"
+        )
+        return
 
     await message.reply_text(
         "🔥 Bangla Vibe\n\n"
@@ -370,7 +381,9 @@ async def admin_command(
         return
 
     if not is_admin(user.id):
-        await message.reply_text("⛔ এই কমান্ড শুধু Admin ব্যবহার করতে পারবেন।")
+        await message.reply_text(
+            "⛔ এই কমান্ড শুধু Admin ব্যবহার করতে পারবেন।"
+        )
         return
 
     context.user_data.clear()
@@ -481,7 +494,8 @@ async def handle_admin_button(update, context):
         try:
             async with pool.acquire() as conn:
                 count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM contacts"
+                    "SELECT COUNT(DISTINCT user_id) "
+                    "FROM contacts WHERE user_id IS NOT NULL"
                 )
         finally:
             await pool.close()
@@ -540,30 +554,59 @@ async def handle_media_message(update, context):
 
     step = context.user_data.get("step")
 
-    if step != "media":
+    # Receive the main video, photo or audio.
+    if step == "media":
+        media_type = context.user_data.get("media_type")
+        file_id = None
+
+        if media_type == "video" and message.video:
+            file_id = message.video.file_id
+        elif media_type == "audio" and message.audio:
+            file_id = message.audio.file_id
+        elif media_type == "photo" and message.photo:
+            file_id = message.photo[-1].file_id
+
+        if not file_id:
+            await message.reply_text(
+                "⚠️ সঠিক Video, Photo বা Audio পাঠাও।"
+            )
+            return
+
+        context.user_data["file_id"] = file_id
+        context.user_data["step"] = "thumbnail"
+
+        await message.reply_text(
+            "✅ Content পেয়েছি।\n"
+            "এখন Thumbnail হিসেবে একটি Photo পাঠাও।"
+        )
         return
 
-    media_type = context.user_data.get("media_type")
-    file_id = None
+    # Receive thumbnail, save its Telegram file_id and ask for title.
+    if step == "thumbnail":
+        thumbnail_id = None
 
-    if media_type == "video" and message.video:
-        file_id = message.video.file_id
-    elif media_type == "audio" and message.audio:
-        file_id = message.audio.file_id
-    elif media_type == "photo" and message.photo:
-        file_id = message.photo[-1].file_id
+        if message.photo:
+            thumbnail_id = message.photo[-1].file_id
+        elif (
+            message.document
+            and message.document.mime_type
+            and message.document.mime_type.startswith("image/")
+        ):
+            thumbnail_id = message.document.file_id
 
-    if not file_id:
-        await message.reply_text("⚠️ সঠিক Video, Photo বা Audio পাঠাও।")
+        if not thumbnail_id:
+            await message.reply_text(
+                "⚠️ Thumbnail হিসেবে একটি Photo বা Image পাঠাও।"
+            )
+            return
+
+        context.user_data["thumbnail_file_id"] = thumbnail_id
+        context.user_data["step"] = "title"
+
+        await message.reply_text(
+            "✅ Thumbnail পেয়েছি।\nএখন Content-এর Title লিখুন।"
+        )
         return
-
-    context.user_data["file_id"] = file_id
-    context.user_data["step"] = "thumbnail"
-
-    await message.reply_text(
-        "✅ Content পেয়েছি।\n"
-        "এখন Thumbnail হিসেবে একটি Photo পাঠাও।"
-    )
 
 
 # =====================================================
@@ -578,86 +621,103 @@ async def text_handler(update, context):
         return
 
     text = message.text.strip()
-    await save_contact(user)
+
+    try:
+        await save_contact(user)
+    except Exception:
+        logger.exception("Could not update contact")
 
     if text == "▶️ Open Video":
         await show_open_video_menu(update, context)
         return
 
-    if is_admin(user.id):
-        step = context.user_data.get("step")
+    if not is_admin(user.id):
+        return
 
-        if step == "title":
-            context.user_data["title"] = text
-            context.user_data["step"] = "description"
+    step = context.user_data.get("step")
 
-            await message.reply_text(
-                "Description লিখুন। না চাইলে skip লিখুন।"
-            )
-            return
+    if step == "title":
+        context.user_data["title"] = text
+        context.user_data["step"] = "description"
 
-        if step == "description":
-            context.user_data["description"] = (
-                "" if text.lower() == "skip" else text
-            )
-            context.user_data["step"] = "category"
+        await message.reply_text(
+            "Description লিখুন। না চাইলে skip লিখুন।"
+        )
+        return
 
-            await message.reply_text(
-                "Category নির্বাচন করুন:",
-                reply_markup=await admin_category_keyboard(),
-            )
-            return
+    if step == "description":
+        context.user_data["description"] = (
+            "" if text.lower() == "skip" else text
+        )
+        context.user_data["step"] = "category"
 
-        if step == "add_category":
-            pool = await get_pool()
-            try:
-                async with pool.acquire() as conn:
+        await message.reply_text(
+            "Category নির্বাচন করুন:",
+            reply_markup=await admin_category_keyboard(),
+        )
+        return
+
+    if step == "thumbnail":
+        await message.reply_text(
+            "⚠️ আগে Thumbnail হিসেবে একটি Photo পাঠান।"
+        )
+        return
+
+    if step == "add_category":
+        pool = await get_pool()
+
+        try:
+            async with pool.acquire() as conn:
+                exists = await conn.fetchval(
+                    "SELECT id FROM categories WHERE name=$1 LIMIT 1",
+                    text,
+                )
+
+                if not exists:
                     await conn.execute(
-                        """
-                        INSERT INTO categories(name)
-                        VALUES($1)
-                        ON CONFLICT(name) DO NOTHING
-                        """,
+                        "INSERT INTO categories(name) VALUES($1)",
                         text,
                     )
-            finally:
-                await pool.close()
+        finally:
+            await pool.close()
 
-            context.user_data.clear()
-            await message.reply_text(
-                f"✅ Category যোগ হয়েছে: {text}",
-                reply_markup=admin_keyboard(),
-            )
+        context.user_data.clear()
+        await message.reply_text(
+            f"✅ Category যোগ হয়েছে: {text}",
+            reply_markup=admin_keyboard(),
+        )
+        return
+
+    if step == "delete":
+        try:
+            media_id = int(text)
+        except ValueError:
+            await message.reply_text("শুধু Media ID লিখুন।")
             return
 
-        if step == "delete":
-            try:
-                media_id = int(text)
-            except ValueError:
-                await message.reply_text("শুধু Media ID লিখুন।")
-                return
+        pool = await get_pool()
 
-            pool = await get_pool()
-            try:
-                async with pool.acquire() as conn:
-                    result = await conn.execute(
-                        "DELETE FROM media WHERE id=$1",
-                        media_id,
-                    )
-            finally:
-                await pool.close()
+        try:
+            async with pool.acquire() as conn:
+                result = await conn.execute(
+                    "DELETE FROM media WHERE id=$1",
+                    media_id,
+                )
+        finally:
+            await pool.close()
 
-            context.user_data.clear()
-            await message.reply_text(
-                "✅ Media delete হয়েছে।"
-                if result == "DELETE 1"
-                else "❌ Media ID পাওয়া যায়নি।",
-                reply_markup=admin_keyboard(),
-            )
-            return
+        context.user_data.clear()
 
-        if await handle_admin_button(update, context):
-            return
+        await message.reply_text(
+            "✅ Media delete হয়েছে।"
+            if result == "DELETE 1"
+            else "❌ Media ID পাওয়া যায়নি।",
+            reply_markup=admin_keyboard(),
+        )
+        return
+
+    if await handle_admin_button(update, context):
+        return
 
 
 # =====================================================
@@ -678,7 +738,9 @@ async def show_category(query, category_id, page=0):
             )
 
             if not category:
-                await query.edit_message_text("❌ Category পাওয়া যায়নি।")
+                await query.edit_message_text(
+                    "❌ Category পাওয়া যায়নি।"
+                )
                 return
 
             total = await conn.fetchval(
@@ -703,7 +765,16 @@ async def show_category(query, category_id, page=0):
 
     if not total:
         await query.edit_message_text(
-            f"📁 {category}\n\nএই Category-তে এখনো Content নেই।"
+            f"📁 {category}\n\n"
+            "এই Category-তে এখনো Content নেই।",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🏠 Categories",
+                        callback_data="categories",
+                    )
+                ]
+            ]),
         )
         return
 
@@ -801,6 +872,7 @@ async def show_selected_media(query, media_id, category_id, page):
             web_app=WebAppInfo(url=media_url),
         )
     else:
+        # Telegram Web App buttons are for private chats.
         open_button = InlineKeyboardButton(
             "▶️ Content দেখুন",
             url=media_url,
@@ -868,7 +940,9 @@ async def save_media(query, context, category_id):
             )
 
             if not category:
-                await query.message.reply_text("❌ Category পাওয়া যায়নি।")
+                await query.message.reply_text(
+                    "❌ Category পাওয়া যায়নি।"
+                )
                 return
 
             media_id = await conn.fetchval(
@@ -896,7 +970,8 @@ async def save_media(query, context, category_id):
     await query.message.reply_text(
         f"✅ Content যোগ হয়েছে!\n"
         f"🆔 ID: {media_id}\n"
-        f"📁 Category: {category}"
+        f"📁 Category: {category}",
+        reply_markup=admin_keyboard(),
     )
 
 
@@ -987,6 +1062,7 @@ async def download_file(file_id):
 
 def run_async(coro):
     loop = asyncio.new_event_loop()
+
     try:
         return loop.run_until_complete(coro)
     finally:
@@ -997,6 +1073,7 @@ def run_async(coro):
 def thumbnail_api(media_id):
     async def get_row():
         pool = await get_pool()
+
         try:
             async with pool.acquire() as conn:
                 return await conn.fetchrow(
@@ -1028,6 +1105,7 @@ def thumbnail_api(media_id):
 def media_api(media_id):
     async def get_row():
         pool = await get_pool()
+
         try:
             async with pool.acquire() as conn:
                 return await conn.fetchrow(
@@ -1070,6 +1148,7 @@ def media_api(media_id):
 def media_api_file(media_type, media_id):
     async def get_row():
         pool = await get_pool()
+
         try:
             async with pool.acquire() as conn:
                 return await conn.fetchrow(
@@ -1127,6 +1206,21 @@ def run_flask():
 
 
 # =====================================================
+# ERROR HANDLER
+# =====================================================
+
+async def error_handler(update, context):
+    logger.error(
+        "Telegram update processing failed",
+        exc_info=(
+            type(context.error),
+            context.error,
+            context.error.__traceback__,
+        ) if context.error else None,
+    )
+
+
+# =====================================================
 # INITIALIZATION
 # =====================================================
 
@@ -1166,7 +1260,9 @@ def main():
         .build()
     )
 
-    # Group -1: diagnostic logging; normal handlers still run afterward.
+    application.add_error_handler(error_handler)
+
+    # Log group messages without stopping other handlers.
     application.add_handler(
         MessageHandler(filters.ALL, log_group_updates),
         group=-1,
