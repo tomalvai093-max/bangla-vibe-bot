@@ -1,59 +1,812 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="bn">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Live Store</title>
-<style>
-body{margin:0;background:#0b1220;color:white;font-family:Arial,sans-serif}
-header{padding:20px;background:#142b49}
-main{max-width:1000px;margin:auto;padding:15px}
-a{color:#bcdcff}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
-.card{background:#172438;border-radius:12px;overflow:hidden;padding-bottom:12px}
-img{width:100%;aspect-ratio:16/9;object-fit:cover}
-h3{padding:0 12px}
-video{width:100%;background:black}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080810">
+  <title>Live Store — Premium Video Zone</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080810;
+      --panel: #12111d;
+      --panel2: #191427;
+      --purple: #8b5cf6;
+      --pink: #ec4899;
+      --cyan: #22d3ee;
+      --text: #f8f7ff;
+      --muted: #a5a1b8;
+      --border: rgba(167,139,250,.24);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(ellipse at 10% 0%, rgba(139,92,246,.18), transparent 35%),
+        radial-gradient(ellipse at 100% 15%, rgba(236,72,153,.10), transparent 30%),
+        var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+
+    button, input { font: inherit; }
+
+    button { cursor: pointer; }
+
+    .app {
+      width: min(100%, 760px);
+      margin: 0 auto;
+      padding: 16px 14px 40px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 2px 22px;
+    }
+
+    .logo {
+      width: 48px;
+      height: 48px;
+      flex: 0 0 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 16px;
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      box-shadow: 0 0 24px rgba(139,92,246,.4);
+      font-size: 24px;
+    }
+
+    .brand {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 25px;
+      font-weight: 850;
+      letter-spacing: -.7px;
+    }
+
+    .brand p {
+      margin: 3px 0 0;
+      color: var(--cyan);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 2px;
+    }
+
+    .status {
+      border: 1px solid rgba(34,211,238,.3);
+      color: var(--cyan);
+      border-radius: 99px;
+      padding: 6px 9px;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 23px;
+      padding: 22px 19px;
+      background: linear-gradient(130deg, #21133b, #11101d 65%, #24112d);
+      box-shadow: 0 12px 40px rgba(0,0,0,.25);
+      margin-bottom: 23px;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: rgba(236,72,153,.14);
+      filter: blur(50px);
+      right: -50px;
+      top: -65px;
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      color: var(--cyan);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 2px;
+    }
+
+    .hero h2 {
+      position: relative;
+      z-index: 1;
+      font-size: clamp(24px, 6vw, 35px);
+      line-height: 1.2;
+      margin: 9px 0;
+    }
+
+    .hero p {
+      position: relative;
+      z-index: 1;
+      color: #c6c1d8;
+      font-size: 13px;
+      line-height: 1.7;
+      margin: 0;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 20px 2px 14px;
+    }
+
+    .section-heading h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .count {
+      color: var(--cyan);
+      font-size: 12px;
+    }
+
+    .filters {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 1px 1px 12px;
+      scrollbar-width: none;
+    }
+
+    .filters::-webkit-scrollbar { display: none; }
+
+    .chip {
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 9px 13px;
+      background: #12111d;
+      color: #d4cde8;
+      font-size: 12px;
+    }
+
+    .chip.active {
+      border-color: var(--purple);
+      background: linear-gradient(110deg, rgba(139,92,246,.3), rgba(236,72,153,.2));
+      color: #fff;
+      box-shadow: 0 0 16px rgba(139,92,246,.12);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 17px;
+    }
+
+    .card {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: linear-gradient(155deg, #171424, #0f0e17);
+      box-shadow: 0 8px 28px rgba(0,0,0,.24);
+      transition: border-color .2s, transform .2s;
+    }
+
+    .card:active { transform: scale(.99); }
+
+    .poster {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #20162e;
+      overflow: hidden;
+      cursor: pointer;
+    }
+
+    .poster img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .poster::after {
+      content: "";
+      position: absolute;
+      inset: 40% 0 0;
+      background: linear-gradient(transparent, rgba(8,8,16,.6));
+      pointer-events: none;
+    }
+
+    .play {
+      position: absolute;
+      z-index: 2;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%,-50%);
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,.6);
+      background: linear-gradient(135deg, var(--purple), var(--pink));
+      color: #fff;
+      font-size: 23px;
+      box-shadow: 0 0 28px rgba(236,72,153,.35);
+    }
+
+    .category-label {
+      position: absolute;
+      z-index: 3;
+      left: 12px;
+      bottom: 11px;
+      border: 1px solid rgba(255,255,255,.15);
+      background: rgba(10,8,20,.82);
+      color: #e9d5ff;
+      padding: 6px 10px;
+      border-radius: 99px;
+      font-size: 11px;
+      backdrop-filter: blur(8px);
+    }
+
+    .card-body { padding: 15px; }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .description {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+      overflow-wrap: anywhere;
+    }
+
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .date {
+      color: #8d88a1;
+      font-size: 10px;
+    }
+
+    .watch {
+      border: 0;
+      border-radius: 11px;
+      padding: 10px 14px;
+      background: linear-gradient(105deg, var(--purple), var(--pink));
+      color: white;
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: 0 5px 20px rgba(139,92,246,.22);
+    }
+
+    .message {
+      border: 1px dashed rgba(167,139,250,.35);
+      border-radius: 17px;
+      padding: 26px 15px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.7;
+      font-size: 13px;
+    }
+
+    .footer {
+      text-align: center;
+      color: #77718d;
+      font-size: 10px;
+      padding: 30px 0 4px;
+      letter-spacing: 1px;
+    }
+
+    /* Player overlay */
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      inset: 0;
+      background: rgba(5,4,12,.96);
+      overflow-y: auto;
+      padding: max(14px, env(safe-area-inset-top)) 12px 25px;
+    }
+
+    .modal.open { display: block; }
+
+    .modal-inner {
+      width: min(100%, 760px);
+      margin: 0 auto;
+    }
+
+    .modal-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 0 15px;
+    }
+
+    .back {
+      width: 42px;
+      height: 42px;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      color: #fff;
+      background: #151220;
+      font-size: 20px;
+    }
+
+    .modal-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .modal-title strong {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .modal-title small {
+      display: block;
+      color: var(--cyan);
+      margin-top: 4px;
+    }
+
+    .player-shell {
+      position: relative;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(139,92,246,.45);
+      background: #000;
+      box-shadow: 0 0 30px rgba(139,92,246,.12);
+    }
+
+    .player-shell video {
+      display: block;
+      width: 100%;
+      max-height: 70vh;
+      aspect-ratio: 16/9;
+      background: #000;
+      object-fit: contain;
+    }
+
+    .player-poster {
+      position: absolute;
+      z-index: 4;
+      inset: 0;
+      background: #100c1b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      padding: 15px;
+      text-align: center;
+    }
+
+    .player-poster img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      opacity: .9;
+    }
+
+    .poster-content {
+      position: relative;
+      z-index: 2;
+      padding: 15px;
+      border-radius: 15px;
+      background: rgba(8,8,16,.8);
+      border: 1px solid var(--border);
+      max-width: 100%;
+    }
+
+    .poster-content p {
+      color: #c9c3da;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .gradient-btn {
+      border: 0;
+      border-radius: 12px;
+      padding: 13px 16px;
+      background: linear-gradient(110deg, var(--purple), var(--pink));
+      color: #fff;
+      font-weight: 800;
+      width: 100%;
+      box-shadow: 0 0 22px rgba(236,72,153,.17);
+    }
+
+    .secondary-btn {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: #171323;
+      color: #fff;
+      width: 100%;
+      margin-top: 9px;
+    }
+
+    .gate-note {
+      color: #bcb5d0;
+      font-size: 11px;
+      line-height: 1.7;
+      margin-top: 10px;
+    }
+
+    .hidden { display: none !important; }
+
+    @media (min-width: 560px) {
+      .app { padding: 22px 20px 45px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card h3 { font-size: 15px; }
+      .hero { padding: 28px; }
+    }
+  </style>
 </head>
 <body>
-<header>
-<h1>📺 Live Store</h1>
-<a href="/admin">Admin Panel</a>
-</header>
-<main>
-<p id="status">ভিডিও লোড হচ্ছে...</p>
-<div class="grid" id="videos"></div>
-</main>
-<script>
-async function load(){
- const status=document.getElementById('status');
- const box=document.getElementById('videos');
- try{
-  const res=await fetch('/api/videos');
-  const videos=await res.json();
-  if(!res.ok)throw Error(videos.error||'লোড করা যায়নি');
-  box.replaceChildren();
-  status.textContent=videos.length?'':'এখনো কোনো ভিডিও নেই।';
-  videos.forEach(v=>{
-   const card=document.createElement('div');
-   card.className='card';
-   const img=document.createElement('img');
-   img.src=v.thumbnail_url;
-   img.alt=v.title;
-   const title=document.createElement('h3');
-   title.textContent=v.title;
-   const video=document.createElement('video');
-   video.controls=true;
-   video.preload='none';
-   video.src=v.video_url;
-   video.poster=v.thumbnail_url;
-   card.append(img,title,video);
-   box.append(card);
-  });
- }catch(e){status.textContent=e.message}
-}
-load();
-</script>
+  <main class="app">
+    <header class="header">
+      <div class="logo">🎬</div>
+      <div class="brand">
+        <h1>Live Store</h1>
+        <p>PREMIUM VIDEO ZONE</p>
+      </div>
+      <div class="status">● LIVE</div>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow">WELCOME TO LIVE STORE</div>
+      <h2>Watch Something<br>Extraordinary.</h2>
+      <p>তোমার পছন্দের ভিডিও খুঁজে নাও। Thumbnail-এ ক্লিক করে ভিডিও দেখো।</p>
+    </section>
+
+    <div class="section-heading">
+      <h2>🔥 ভিডিও লাইব্রেরি</h2>
+      <span class="count" id="count">লোড হচ্ছে...</span>
+    </div>
+
+    <nav class="filters" id="filters">
+      <button class="chip active" data-category="সব">সব ভিডিও</button>
+    </nav>
+
+    <section class="grid" id="videoGrid">
+      <div class="message">ভিডিও লোড হচ্ছে...</div>
+    </section>
+
+    <footer class="footer">LIVE STORE · PREMIUM VIDEO ZONE</footer>
+  </main>
+
+  <section class="modal" id="playerModal" aria-modal="true" role="dialog">
+    <div class="modal-inner">
+      <header class="modal-top">
+        <button class="back" id="closePlayer" aria-label="Back">‹</button>
+        <div class="modal-title">
+          <strong id="playerTitle">ভিডিও</strong>
+          <small id="playerCategory">Live Store</small>
+        </div>
+      </header>
+
+      <div class="player-shell">
+        <video id="videoPlayer" controls playsinline preload="metadata"></video>
+
+        <div class="player-poster" id="playerPoster">
+          <img id="posterImage" src="" alt="ভিডিও Thumbnail">
+          <div class="poster-content">
+            <strong>🔒 ভিডিও চালুর আগে বিজ্ঞাপন</strong>
+            <p id="adMessage">
+              বিজ্ঞাপন খুলে ফিরে আসার পর ভিডিও চালু করার অপশন আসবে।
+            </p>
+            <button class="gradient-btn" id="openAd">বিজ্ঞাপন দেখুন</button>
+            <button class="secondary-btn hidden" id="continueVideo">
+              বিজ্ঞাপন শেষে ভিডিও চালু করুন
+            </button>
+            <div class="gate-note" id="gateNote">
+              বিজ্ঞাপন শেষ হয়েছে কি না, তা Adsterra-র নির্দিষ্ট completion signal ছাড়া স্বয়ংক্রিয়ভাবে যাচাই করা যায় না।
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="padding:15px 2px">
+        <h3 id="modalDescriptionTitle">ভিডিওর বিবরণ</h3>
+        <p class="description" id="modalDescription"></p>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.ready();
+        tg.expand();
+        tg.setHeaderColor("#080810");
+        tg.setBackgroundColor("#080810");
+      }
+
+      const grid = document.getElementById("videoGrid");
+      const count = document.getElementById("count");
+      const filters = document.getElementById("filters");
+      const modal = document.getElementById("playerModal");
+      const player = document.getElementById("videoPlayer");
+      const poster = document.getElementById("playerPoster");
+      const posterImage = document.getElementById("posterImage");
+      const openAd = document.getElementById("openAd");
+      const continueVideo = document.getElementById("continueVideo");
+
+      let videos = [];
+      let currentVideo = null;
+      let adUrl = "";
+      let selectedCategory = "সব";
+      let adOpened = false;
+      let returnedFromAd = false;
+      let adOpenTime = 0;
+
+      async function loadConfig() {
+        try {
+          const response = await fetch("/api/config", { cache: "no-store" });
+          if (!response.ok) throw new Error("Config unavailable");
+          const config = await response.json();
+          adUrl = config.ad_url || "";
+        } catch (error) {
+          console.error("Config error:", error);
+        }
+      }
+
+      async function loadVideos() {
+        try {
+          const response = await fetch("/api/videos", { cache: "no-store" });
+          if (!response.ok) throw new Error("Video list unavailable");
+
+          videos = await response.json();
+          buildFilters();
+          renderVideos();
+
+        } catch (error) {
+          console.error(error);
+          count.textContent = "ত্রুটি";
+          grid.innerHTML =
+            '<div class="message">ভিডিও লোড হয়নি। ইন্টারনেট সংযোগ ও Render Logs পরীক্ষা করুন।</div>';
+        }
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, char => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        })[char]);
+      }
+
+      function buildFilters() {
+        const categories = [...new Set(
+          videos.map(video => video.category).filter(Boolean)
+        )];
+
+        filters.innerHTML = "";
+
+        const all = ["সব", ...categories];
+
+        all.forEach(category => {
+          const button = document.createElement("button");
+          button.className = "chip" +
+            (category === selectedCategory ? " active" : "");
+          button.textContent = category === "সব" ? "সব ভিডিও" : category;
+          button.dataset.category = category;
+
+          button.addEventListener("click", () => {
+            selectedCategory = category;
+            filters.querySelectorAll(".chip").forEach(chip => {
+              chip.classList.toggle(
+                "active",
+                chip.dataset.category === selectedCategory
+              );
+            });
+            renderVideos();
+          });
+
+          filters.appendChild(button);
+        });
+      }
+
+      function renderVideos() {
+        const visible = selectedCategory === "সব"
+          ? videos
+          : videos.filter(video => video.category === selectedCategory);
+
+        count.textContent = `${visible.length} টি ভিডিও`;
+
+        if (!visible.length) {
+          grid.innerHTML =
+            '<div class="message">এখনো কোনো ভিডিও নেই।<br>Admin Telegram বট থেকে ভিডিও আপলোড করলে এখানে দেখা যাবে।</div>';
+          return;
+        }
+
+        grid.innerHTML = visible.map(video => `
+          <article class="card">
+            <div class="poster" data-play="${video.id}">
+              <img
+                src="${escapeHtml(video.thumbnail_url)}"
+                alt="${escapeHtml(video.title)}"
+                loading="lazy"
+                onerror="this.style.opacity='.15'"
+              >
+              <div class="play">▶</div>
+              <span class="category-label">${escapeHtml(video.category || "অন্যান্য")}</span>
+            </div>
+            <div class="card-body">
+              <h3>${escapeHtml(video.title)}</h3>
+              <p class="description">${escapeHtml(video.description || "Live Store ভিডিও")}</p>
+              <div class="card-footer">
+                <span class="date">LIVE STORE</span>
+                <button class="watch" data-play="${video.id}">▶ Watch Video</button>
+              </div>
+            </div>
+          </article>
+        `).join("");
+
+        grid.querySelectorAll("[data-play]").forEach(button => {
+          button.addEventListener("click", () => {
+            const video = videos.find(item =>
+              String(item.id) === button.dataset.play
+            );
+            if (video) openPlayer(video);
+          });
+        });
+      }
+
+      function openPlayer(video) {
+        currentVideo = video;
+        adOpened = false;
+        returnedFromAd = false;
+        adOpenTime = 0;
+
+        player.pause();
+        player.removeAttribute("src");
+        player.load();
+
+        document.getElementById("playerTitle").textContent = video.title;
+        document.getElementById("playerCategory").textContent =
+          video.category || "Live Store";
+        document.getElementById("modalDescription").textContent =
+          video.description || "এই ভিডিওর জন্য কোনো বিবরণ দেওয়া হয়নি।";
+
+        posterImage.src = video.thumbnail_url;
+        poster.classList.remove("hidden");
+        continueVideo.classList.add("hidden");
+        openAd.classList.remove("hidden");
+
+        if (adUrl) {
+          document.getElementById("adMessage").textContent =
+            "প্রথমে বিজ্ঞাপন খুলবে। বিজ্ঞাপন থেকে ফিরে আসার পর নিচের ভিডিও চালু করার বাটন ব্যবহার করো।";
+          openAd.textContent = "বিজ্ঞাপন দেখুন";
+          document.getElementById("gateNote").textContent =
+            "বিজ্ঞাপন সম্পন্ন হওয়ার স্বয়ংক্রিয় নিশ্চয়তার জন্য Adsterra-র completion callback প্রয়োজন।";
+        } else {
+          document.getElementById("adMessage").textContent =
+            "Adsterra URL এখনো Render Environment-এ সেট করা হয়নি।";
+          openAd.textContent = "বিজ্ঞাপন সেট করা নেই";
+        }
+
+        modal.classList.add("open");
+        document.body.style.overflow = "hidden";
+      }
+
+      function closePlayer() {
+        player.pause();
+        player.removeAttribute("src");
+        player.load();
+        modal.classList.remove("open");
+        document.body.style.overflow = "";
+        currentVideo = null;
+      }
+
+      function startVideo() {
+        if (!currentVideo) return;
+
+        poster.classList.add("hidden");
+        player.src = currentVideo.video_url;
+        player.load();
+
+        const playPromise = player.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(() => {
+            poster.classList.remove("hidden");
+            document.getElementById("adMessage").textContent =
+              "ভিডিও চালু হয়নি। আবার ভিডিও চালু করার চেষ্টা করো।";
+          });
+        }
+      }
+
+      openAd.addEventListener("click", () => {
+        if (!adUrl) {
+          document.getElementById("adMessage").textContent =
+            "Render Environment-এ ADSTERRA_URL সেট করে আবার Deploy করতে হবে।";
+          return;
+        }
+
+        const opened = window.open(adUrl, "_blank");
+
+        if (!opened) {
+          document.getElementById("adMessage").textContent =
+            "বিজ্ঞাপন খোলা যায়নি। ব্রাউজারের pop-up permission পরীক্ষা করো।";
+          return;
+        }
+
+        adOpened = true;
+        adOpenTime = Date.now();
+
+        document.getElementById("adMessage").textContent =
+          "বিজ্ঞাপন শেষ করে এই পেজে ফিরে আসো।";
+      });
+
+      document.addEventListener("visibilitychange", () => {
+        if (
+          document.visibilityState === "visible" &&
+          adOpened &&
+          Date.now() - adOpenTime >= 1000
+        ) {
+          returnedFromAd = true;
+          continueVideo.classList.remove("hidden");
+          document.getElementById("adMessage").textContent =
+            "তুমি ফিরে এসেছ। বিজ্ঞাপন শেষ হলে ভিডিও চালু করো।";
+        }
+      });
+
+      continueVideo.addEventListener("click", () => {
+        if (!adOpened || !returnedFromAd) return;
+        startVideo();
+      });
+
+      document.getElementById("closePlayer").addEventListener("click", closePlayer);
+
+      modal.addEventListener("click", event => {
+        if (event.target === modal) closePlayer();
+      });
+
+      document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && modal.classList.contains("open")) {
+          closePlayer();
+        }
+      });
+
+      window.addEventListener("pageshow", () => {
+        if (adOpened && document.visibilityState === "visible") {
+          returnedFromAd = true;
+          continueVideo.classList.remove("hidden");
+        }
+      });
+
+      // Actual ad provider integration can call this function
+      // only when its genuine completion callback confirms completion.
+      window.liveStoreAdCompleted = function(videoId) {
+        if (!currentVideo || String(currentVideo.id) !== String(videoId)) return;
+        startVideo();
+      };
+
+      Promise.all([loadConfig(), loadVideos()]);
+    })();
+  </script>
 </body>
-</html>
+ </html>
