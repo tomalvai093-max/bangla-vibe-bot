@@ -1,0 +1,21 @@
+services:
+  # Live Store Telegram Bot
+  - type: worker
+    name: live-store-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: WEB_APP_URL
+        sync: false
+
+  # Live Store Web App
+  - type: web
+    name: live-store-web
+    runtime: static
+    buildCommand: echo "Preparing Live Store"
+    staticPublishPath: ./public
